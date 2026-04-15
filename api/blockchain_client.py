@@ -68,26 +68,3 @@ def get_difficulty_history(n_points: int = 100) -> list[dict]:
     response.raise_for_status()
     data = response.json()
     return data.get("values", [])[-n_points:]
-
-
-# ---------------------------------------------------------------------------
-# Session 1 - Milestone 2: first API call (~10 lines), prints live block data
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    # Fetch the latest block from Blockstream (no API key needed)
-    tip = get_tip_hash()
-    block = get_block_blockstream(tip)
-
-    print(f"Block height   : {block['height']}")
-    print(f"Block hash     : {block['id']}")
-    # The hash starts with many leading zeros — this is the Proof of Work result.
-    # Bitcoin requires SHA256(SHA256(header)) < target. More leading zeros = harder puzzle.
-    print(f"Leading zeros  : {len(block['id']) - len(block['id'].lstrip('0'))} hex digits")
-    print(f"Nonce          : {block['nonce']}")
-    # 'bits' encodes the compact form of the target threshold (see Section 6 of notes).
-    # Format: first byte = exponent, next 3 bytes = coefficient → target = coeff * 256^(exp-3)
-    print(f"Bits (target)  : {hex(block['bits'])}")
-    print(f"Difficulty     : {block['difficulty']:.2e}")
-    print(f"Transactions   : {block['tx_count']}")
-    print(f"Timestamp      : {block['timestamp']}")
