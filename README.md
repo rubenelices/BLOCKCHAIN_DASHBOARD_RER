@@ -7,9 +7,9 @@ Update this README every week.
 
 | Field | Value |
 |---|---|
-| Student Name | |
-| GitHub Username | |
-| Project Title | |
+| Student Name | Rubén Elices Rodríguez |
+| GitHub Username | rubenelices |
+| Project Title | Blockchain_dashboard |
 | Chosen AI Approach | |
 
 ## Module Tracking
@@ -18,7 +18,7 @@ Use one of these values: `Not started`, `In progress`, `Done`
 
 | Module | What it should include | Status |
 |---|---|---|
-| M1 | Proof of Work Monitor | Not started |
+| M1 | Proof of Work Monitor | In progress |
 | M2 | Block Header Analyzer | Not started |
 | M3 | Difficulty History | Not started |
 | M4 | AI Component | Not started |
