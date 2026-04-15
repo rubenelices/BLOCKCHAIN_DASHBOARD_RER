@@ -10,7 +10,7 @@ Update this README every week.
 | Student Name | Rubén Elices Rodríguez |
 | GitHub Username | rubenelices |
 | Project Title | Blockchain_dashboard |
-| Chosen AI Approach | |
+| Chosen AI Approach | M4 option 2 — Anomaly Detector: identify blocks with statistically abnormal inter-arrival times using an exponential distribution baseline |
 
 ## Module Tracking
 
@@ -25,23 +25,15 @@ Use one of these values: `Not started`, `In progress`, `Done`
 
 ## Current Progress
 
-Write 3 to 5 short lines about what you have already done.
-
-- 
-- 
-- 
+- Session 1 done: repo set up, README updated, API client connected to Blockstream and returning real Bitcoin data (height, hash, nonce, bits, difficulty, tx count).
 
 ## Next Step
 
-Write the next small step you will do before the next class.
-
-- 
+- Implement M1: build the Streamlit PoW Monitor panel with live difficulty, leading-zero visualisation, block time histogram, and estimated hash rate.
 
 ## Main Problem or Blocker
 
-Write here if you are stuck with something.
-
-- 
+- None currently.
 
 ## How to Run
 
