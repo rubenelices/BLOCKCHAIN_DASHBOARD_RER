@@ -7,10 +7,10 @@ Update this README every week.
 
 | Field | Value |
 |---|---|
-| Student Name | Rubén Elices Rodríguez |
+| Student Name | RubÃ©n Elices RodrÃ­guez |
 | GitHub Username | rubenelices |
 | Project Title | Blockchain_dashboard |
-| Chosen AI Approach | M4 option 2 — Anomaly Detector: identify blocks with statistically abnormal inter-arrival times using an exponential distribution baseline |
+| Chosen AI Approach | M4 option 2 â€” Anomaly Detector: identify blocks with statistically abnormal inter-arrival times using an exponential distribution baseline |
 
 ## Module Tracking
 
@@ -58,3 +58,21 @@ template-blockchain-dashboard/
     |-- m3_difficulty_history.py
     `-- m4_ai_component.py
 ```
+
+<!-- student-repo-auditor:teacher-feedback:start -->
+## Teacher Feedback
+
+### Kick-off Review
+
+Review time: 2026-04-16 09:59 CEST
+Status: Green
+
+Strength:
+- Your repository keeps the expected classroom structure.
+
+Improve now:
+- The code should connect the API output to theory, especially leading zeros and bits or target.
+
+Next step:
+- Add two short code comments that explain leading zeros and the meaning of bits or target.
+<!-- student-repo-auditor:teacher-feedback:end -->
