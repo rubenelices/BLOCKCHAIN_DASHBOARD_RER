@@ -8,9 +8,11 @@ block = requests.get(f"https://blockstream.info/api/block/{tip_hash}").json()
 
 print(f"Block height : {block['height']}")
 print(f"Block hash   : {block['id']}")
-# The hash has many leading zeros — proof that SHA256(SHA256(header)) < target
+# Leading zeros: Bitcoin's PoW requires SHA256(SHA256(header)) to start with many zeros.
+# The more zeros, the harder the puzzle — this is how difficulty is enforced.
 print(f"Nonce        : {block['nonce']}")
-# 'bits' is the compact encoding of the target threshold (exponent + coefficient)
 print(f"Bits         : {hex(block['bits'])}")
+# Bits encodes the target threshold in compact form: target = coefficient * 256^(exponent-3).
+# A valid block hash must be below this target, which explains the leading zeros above.
 print(f"Difficulty   : {block['difficulty']:.2e}")
 print(f"Transactions : {block['tx_count']}")

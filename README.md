@@ -7,10 +7,10 @@ Update this README every week.
 
 | Field | Value |
 |---|---|
-| Student Name | RubÃ©n Elices RodrÃ­guez |
+| Student Name | Ruben Elices Rodriguez |
 | GitHub Username | rubenelices |
 | Project Title | Blockchain_dashboard |
-| Chosen AI Approach | M4 option 2 â€” Anomaly Detector: identify blocks with statistically abnormal inter-arrival times using an exponential distribution baseline |
+| Chosen AI Approach | M4 option 2, Anomaly Detector |
 
 ## Module Tracking
 
