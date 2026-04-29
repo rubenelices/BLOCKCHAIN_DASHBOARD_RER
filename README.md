@@ -70,15 +70,15 @@ template-blockchain-dashboard/
 
 ### Kick-off Review
 
-Review time: 2026-04-16 09:59 CEST
-Status: Green
+Review time: 2026-04-29 20:44 CEST
+Status: Amber
 
 Strength:
-- Your repository keeps the expected classroom structure.
+- M2 already includes concrete block-header analysis work.
 
 Improve now:
-- The code should connect the API output to theory, especially leading zeros and bits or target.
+- I do not yet see a clear dashboard integration for M1, M2, M3, and M4 in app.py.
 
 Next step:
-- Add two short code comments that explain leading zeros and the meaning of bits or target.
+- Make sure app.py visibly integrates M1, M2, M3, and M4 in the dashboard navigation.
 <!-- student-repo-auditor:teacher-feedback:end -->
