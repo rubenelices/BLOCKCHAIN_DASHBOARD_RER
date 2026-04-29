@@ -58,6 +58,28 @@ def get_block(block_hash: str) -> dict:
     return response.json()
 
 
+def get_block_header_hex(block_hash: str) -> str:
+    """Return the 80-byte block header as a hex string (Blockstream)."""
+    response = requests.get(f"{BLOCKSTREAM_URL}/block/{block_hash}/header", timeout=10)
+    response.raise_for_status()
+    return response.text.strip()
+
+
+def get_block_txids(block_hash: str) -> list[str]:
+    """Return the list of transaction IDs in a block (Blockstream)."""
+    response = requests.get(f"{BLOCKSTREAM_URL}/block/{block_hash}/txids", timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+
+def get_block_by_height(height: int) -> dict:
+    """Return the block at a given height (Blockstream)."""
+    hash_resp = requests.get(f"{BLOCKSTREAM_URL}/block-height/{height}", timeout=10)
+    hash_resp.raise_for_status()
+    block_hash = hash_resp.text.strip()
+    return get_block_blockstream(block_hash)
+
+
 def get_difficulty_history(n_points: int = 100) -> list[dict]:
     """Return the last *n_points* difficulty values as a list of dicts."""
     response = requests.get(

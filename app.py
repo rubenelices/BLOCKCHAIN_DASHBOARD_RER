@@ -1,28 +1,1452 @@
-"""Simple Streamlit entry point for the student project."""
+"""CryptoChain Analyzer — Streamlit dashboard entry point."""
 
+import hashlib
+import time
+from datetime import datetime, timezone
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
-from modules.m1_pow_monitor import render as render_m1
-from modules.m2_block_header import render as render_m2
-from modules.m3_difficulty_history import render as render_m3
-from modules.m4_ai_component import render as render_m4
-
-st.set_page_config(page_title="Blockchain Dashboard", layout="wide")
-
-st.title("Blockchain Dashboard")
-
-tab1, tab2, tab3, tab4 = st.tabs(
-    ["M1 - PoW Monitor", "M2 - Block Header", "M3 - Difficulty History", "M4 - AI Component"]
+# ── Page config — MUST be the very first Streamlit call ──────────────────────
+st.set_page_config(
+    page_title="CryptoChain Analyzer",
+    page_icon="₿",
+    layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
-with tab1:
+# ── Global CSS injection — immediately after set_page_config ─────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&family=Inter:wght@400;500&display=swap');
+
+/* ── CSS variables ── */
+:root {
+    --bg-dark:      #0A0E1A;
+    --bg-card:      #0F1629;
+    --bg-card-alt:  #141C35;
+    --border:       #1E2D5A;
+    --accent-blue:  #00C2FF;
+    --accent-green: #1CE87A;
+    --accent-red:   #FF4560;
+    --accent-gold:  #F7931A;
+    --text-primary: #E8EDF5;
+    --text-muted:   #6B7DA0;
+    --text-mono:    #00C2FF;
+}
+
+/* ── App & background ── */
+.stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+[data-testid="block-container"] {
+    background-color: var(--bg-dark) !important;
+}
+section.main > div { background-color: var(--bg-dark) !important; }
+
+/* Hide sidebar toggle and collapsed sidebar */
+[data-testid="collapsedControl"] { display: none !important; }
+[data-testid="stSidebar"]        { display: none !important; }
+
+/* ── Typography ── */
+h1, h2, h3, h4 {
+    font-family: 'Rajdhani', sans-serif !important;
+    color: var(--text-primary) !important;
+    font-weight: 700 !important;
+}
+p, li { font-family: 'Inter', sans-serif; color: var(--text-primary); }
+
+/* ── Metric cards ── */
+[data-testid="stMetric"] {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border) !important;
+    border-left: 3px solid var(--accent-blue) !important;
+    border-radius: 8px !important;
+    padding: 16px !important;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease !important;
+    cursor: default;
+}
+[data-testid="stMetric"]:hover {
+    border-color: rgba(0,194,255,0.4) !important;
+    box-shadow: 0 4px 24px rgba(0,194,255,0.10), 0 1px 6px rgba(0,0,0,0.35) !important;
+    transform: translateY(-2px) !important;
+}
+[data-testid="stMetricLabel"] {
+    font-family: 'Rajdhani', sans-serif !important;
+    color: var(--text-muted) !important;
+    font-size: 0.78rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+[data-testid="stMetricValue"] {
+    font-family: 'Rajdhani', sans-serif !important;
+    color: var(--text-primary) !important;
+    font-weight: 700 !important;
+}
+[data-testid="stMetricDelta"] { font-family: 'Rajdhani', sans-serif !important; }
+
+/* ── DataFrame ── */
+[data-testid="stDataFrame"] { background: var(--bg-card) !important; }
+.dvn-scroller { background: var(--bg-card) !important; }
+
+/* ── Captions ── */
+.stCaption, [data-testid="stCaptionContainer"], small {
+    font-family: 'Inter', sans-serif !important;
+    color: var(--text-muted) !important;
+    font-size: 0.82rem !important;
+}
+
+/* ── Text inputs ── */
+[data-testid="stTextInput"] input {
+    background-color: var(--bg-card-alt) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-primary) !important;
+    font-family: 'Share Tech Mono', monospace !important;
+    border-radius: 6px !important;
+    font-size: 0.85rem !important;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+}
+[data-testid="stTextInput"] input:focus {
+    border-color: var(--accent-blue) !important;
+    box-shadow: 0 0 0 2px rgba(0,194,255,0.18) !important;
+}
+[data-testid="stTextInput"] label {
+    font-family: 'Rajdhani', sans-serif !important;
+    color: var(--text-muted) !important;
+    font-size: 0.8rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+/* ── Slider ── */
+[data-testid="stSlider"] label {
+    font-family: 'Rajdhani', sans-serif !important;
+    color: var(--text-muted) !important;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* ── Progress bar ── */
+[data-testid="stProgressBar"] > div {
+    background-color: var(--border) !important;
+    border-radius: 4px !important;
+}
+[data-testid="stProgressBar"] > div > div {
+    background-color: var(--accent-blue) !important;
+    border-radius: 4px !important;
+}
+
+/* ── Code tags ── */
+code {
+    font-family: 'Share Tech Mono', monospace !important;
+    color: var(--text-mono) !important;
+    background: rgba(0,194,255,0.08) !important;
+    padding: 2px 6px !important;
+    border-radius: 4px !important;
+    font-size: 0.87em !important;
+}
+
+/* ── Scrollbars ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--bg-dark); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-blue); }
+
+/* ── Hr ── */
+hr { border-color: var(--border) !important; opacity: 0.5; }
+
+/* ── Premium Hero — glassmorphism / hedge-fund aesthetic ── */
+@keyframes ph-float {
+    0%, 100% { transform: translateY(0px); }
+    50%       { transform: translateY(-5px); }
+}
+.ph-wrap {
+    position: relative;
+    border-radius: 16px;
+    border: 1px solid rgba(0,100,200,0.22);
+    overflow: hidden;
+    margin-bottom: 0;
+    box-shadow:
+        0 0 0 1px rgba(0,194,255,0.04),
+        0 0 60px rgba(0,80,180,0.14),
+        0 20px 60px rgba(0,0,0,0.5);
+}
+.ph-bg {
+    position: absolute;
+    inset: 0;
+    background: #050b18;
+    background-image:
+        linear-gradient(rgba(0,70,150,0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,70,150,0.06) 1px, transparent 1px);
+    background-size: 40px 40px;
+}
+#ph-canvas {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+}
+.ph-glow-c {
+    position: absolute;
+    top: -40%; left: 50%;
+    transform: translateX(-50%);
+    width: 900px; height: 500px;
+    background: radial-gradient(ellipse, rgba(0,150,255,0.055) 0%, transparent 60%);
+    pointer-events: none; z-index: 2;
+}
+.ph-glow-l {
+    position: absolute;
+    top: 0; left: -10%;
+    width: 420px; height: 100%;
+    background: radial-gradient(ellipse at left center, rgba(0,80,200,0.07) 0%, transparent 65%);
+    pointer-events: none; z-index: 2;
+}
+.ph-glow-r {
+    position: absolute;
+    top: 0; right: -10%;
+    width: 420px; height: 100%;
+    background: radial-gradient(ellipse at right center, rgba(0,180,255,0.05) 0%, transparent 65%);
+    pointer-events: none; z-index: 2;
+}
+.ph-glass {
+    position: relative;
+    z-index: 3;
+    background: linear-gradient(160deg, rgba(8,16,36,0.85) 0%, rgba(5,11,24,0.78) 100%);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    padding: 44px 56px 36px;
+    text-align: center;
+}
+.ph-headline {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 4.6rem;
+    font-weight: 900;
+    letter-spacing: 0.14em;
+    line-height: 1;
+    margin: 0 0 14px 0;
+}
+.ph-btc-sym {
+    color: #F7931A;
+    text-shadow:
+        0 0 30px rgba(247,147,26,0.8),
+        0 0 80px rgba(247,147,26,0.3),
+        0 0 130px rgba(247,147,26,0.1);
+    animation: ph-float 6s ease-in-out infinite;
+}
+.ph-sep {
+    color: #00C2FF;
+    opacity: 0.4;
+    margin: 0 22px;
+    font-weight: 300;
+    font-size: 3rem;
+    line-height: 1;
+    letter-spacing: 0;
+}
+.ph-wordmark {
+    background: linear-gradient(100deg, #E8F4FF 0%, #B8D8F4 40%, #6EC0FF 80%, #00C2FF 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    filter: drop-shadow(0 0 24px rgba(0,160,255,0.28));
+}
+.ph-ghost {
+    position: absolute;
+    bottom: -14px; left: 50%;
+    transform: translateX(-50%);
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 7rem; font-weight: 900;
+    letter-spacing: 0.3em;
+    color: rgba(0,80,160,0.035);
+    white-space: nowrap;
+    pointer-events: none; user-select: none;
+    z-index: 2;
+}
+.ph-divider {
+    position: relative;
+    height: 1px;
+    background: linear-gradient(90deg, transparent 0%, rgba(0,160,255,0.12) 20%, rgba(0,194,255,0.55) 50%, rgba(0,160,255,0.12) 80%, transparent 100%);
+    margin: 16px auto 16px;
+    width: 80%;
+}
+.ph-divider::after {
+    content: '';
+    position: absolute;
+    top: -2px; left: 50%;
+    transform: translateX(-50%);
+    width: 80px; height: 5px;
+    background: radial-gradient(ellipse, rgba(0,194,255,0.5) 0%, transparent 70%);
+}
+.ph-t2 {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.64rem; letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: rgba(0,150,220,0.48);
+    margin: 0 0 20px 0;
+}
+.ph-t2-sep { margin: 0 14px; opacity: 0.4; }
+.ph-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(0,0,0,0.28);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 30px;
+    padding: 5px 18px;
+}
+.ph-live-text {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 0.78rem; font-weight: 700;
+    color: #1CE87A; letter-spacing: 0.07em;
+    text-transform: uppercase;
+}
+.ph-time-text {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.7rem;
+    color: rgba(0,130,190,0.6);
+}
+.ph-pipe { color: rgba(30,50,100,0.8); }
+
+/* ── Pulsing live dot ── */
+@keyframes pulse-live {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(28,232,122,0.5); }
+    50%       { opacity: 0.75; box-shadow: 0 0 0 5px rgba(28,232,122,0); }
+}
+.live-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #1CE87A;
+    animation: pulse-live 2s ease-in-out infinite;
+    flex-shrink: 0;
+}
+
+/* ── Navigation radio — centred floating pills ── */
+[data-testid="stRadio"] {
+    background: transparent !important;
+    border: none !important;
+    padding: 16px 0 10px !important;
+    margin: 0 0 20px 0 !important;
+}
+div[role="radiogroup"] {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    gap: 12px !important;
+    justify-content: center !important;
+    align-items: stretch !important;
+    width: 100% !important;
+}
+div[role="radiogroup"] label {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    background: #0C1424 !important;
+    border: 1px solid #1E2D5A !important;
+    border-radius: 10px !important;
+    padding: 0 38px !important;
+    height: 50px !important;
+    box-sizing: border-box !important;
+    white-space: nowrap !important;
+    cursor: pointer !important;
+    transition: all 0.2s ease !important;
+    font-family: 'Rajdhani', sans-serif !important;
+    font-size: 0.87rem !important;
+    font-weight: 700 !important;
+    color: #4A5E88 !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase !important;
+    min-width: 190px !important;
+    flex: 0 1 240px !important;
+}
+div[role="radiogroup"] label:hover {
+    background: rgba(0,194,255,0.08) !important;
+    border-color: rgba(0,194,255,0.35) !important;
+    color: #7BBDE8 !important;
+    box-shadow: 0 4px 20px rgba(0,194,255,0.09) !important;
+    transform: translateY(-2px) !important;
+}
+div[role="radiogroup"] label:has(input[type=radio]:checked) {
+    background: rgba(0,194,255,0.10) !important;
+    border-color: #00C2FF !important;
+    color: #00C2FF !important;
+    box-shadow: 0 0 22px rgba(0,194,255,0.16) !important;
+}
+/* Hide the radio circle dot */
+div[role="radiogroup"] label > div:first-child { display: none !important; }
+div[role="radiogroup"] label > div:last-child  { margin-left: 0 !important; }
+div[role="radiogroup"] label p {
+    margin: 0 !important;
+    color: inherit !important;
+    font-family: inherit !important;
+    font-size: inherit !important;
+    font-weight: inherit !important;
+    letter-spacing: inherit !important;
+}
+
+/* ── Cards ── */
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 12px;
+    transition: border-color 0.22s ease, box-shadow 0.22s ease, transform 0.15s ease;
+}
+.card:hover {
+    border-color: rgba(0,194,255,0.3);
+    box-shadow: 0 6px 30px rgba(0,194,255,0.07), 0 1px 6px rgba(0,0,0,0.4);
+    transform: translateY(-1px);
+}
+.card-title {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--accent-blue);
+    margin: 0 0 14px 0;
+    padding-bottom: 9px;
+    border-bottom: 1px solid var(--border);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+}
+
+/* ── Module divider ── */
+.module-divider {
+    border: none;
+    border-top: 1px solid var(--accent-blue);
+    margin: 2px 0 22px 0;
+    opacity: 0.28;
+}
+
+/* ── Field label / value ── */
+.field-label {
+    font-family: 'Rajdhani', sans-serif;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin: 10px 0 3px 0;
+}
+.field-val {
+    font-family: 'Share Tech Mono', monospace;
+    color: var(--text-mono);
+    font-size: 0.82rem;
+    background: rgba(0,194,255,0.05);
+    padding: 6px 9px;
+    border-radius: 5px;
+    word-break: break-all;
+    display: block;
+    line-height: 1.45;
+    border: 1px solid rgba(0,194,255,0.1);
+    transition: background 0.2s ease, border-color 0.2s ease;
+}
+.field-val:hover {
+    background: rgba(0,194,255,0.09);
+    border-color: rgba(0,194,255,0.22);
+}
+
+/* ── PoW pipeline ── */
+.pow-step {
+    border-radius: 8px;
+    padding: 14px 12px;
+    text-align: center;
+}
+.pow-step-label {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+}
+.pow-step-value {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.74rem;
+    word-break: break-all;
+    line-height: 1.5;
+}
+.pow-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.6rem;
+    color: var(--text-muted);
+    padding-top: 20px;
+}
+
+/* ── Result banners ── */
+.result-valid {
+    background: rgba(28,232,122,0.09);
+    border: 1px solid rgba(28,232,122,0.5);
+    border-radius: 10px;
+    padding: 16px 24px;
+    text-align: center;
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 1.45rem;
+    font-weight: 700;
+    color: #1CE87A;
+    letter-spacing: 0.07em;
+    margin: 14px 0;
+}
+.result-invalid {
+    background: rgba(255,69,96,0.09);
+    border: 1px solid rgba(255,69,96,0.5);
+    border-radius: 10px;
+    padding: 16px 24px;
+    text-align: center;
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 1.45rem;
+    font-weight: 700;
+    color: #FF4560;
+    letter-spacing: 0.07em;
+    margin: 14px 0;
+}
+
+/* ── Bit bar ── */
+.bit-bar { line-height: 0; display: block; margin: 3px 0; }
+</style>
+""", unsafe_allow_html=True)
+
+# ── Imports from project modules ──────────────────────────────────────────────
+from api.blockchain_client import (
+    get_block_blockstream,
+    get_block_header_hex,
+    get_recent_blocks,
+    get_tip_hash,
+)
+from modules.m1_pow_monitor import (
+    bits_to_target,
+    count_leading_zero_bits,
+    estimate_hashrate,
+    get_inter_block_times,
+)
+from modules.m2_block_header import parse_header, verify_proof_of_work
+from modules.m3_difficulty_history import build_adjustment_dataframe, fetch_adjustment_blocks
+
+# ── Cached API wrappers ───────────────────────────────────────────────────────
+
+@st.cache_data(ttl=30)
+def load_recent_blocks(count: int) -> list[dict]:
+    return get_recent_blocks(count)
+
+
+@st.cache_data(ttl=60)
+def load_block_header_hex(block_hash: str) -> str:
+    return get_block_header_hex(block_hash)
+
+
+@st.cache_data(ttl=60)
+def load_block_data(block_hash: str) -> dict:
+    return get_block_blockstream(block_hash)
+
+
+@st.cache_data(ttl=3600)
+def load_adjustment_blocks(n_periods: int) -> list[dict]:
+    return fetch_adjustment_blocks(n_periods)
+
+
+def _clear_adj_cache() -> None:
+    load_adjustment_blocks.clear()
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def apply_chart_style(fig: go.Figure) -> go.Figure:
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0A0E1A",
+        plot_bgcolor="#0F1629",
+        font=dict(family="Rajdhani", color="#E8EDF5"),
+        xaxis=dict(gridcolor="#1E2D5A", showgrid=True),
+        yaxis=dict(gridcolor="#1E2D5A", showgrid=True),
+        margin=dict(t=30, b=40, l=50, r=20),
+    )
+    return fig
+
+
+def render_error(msg: str) -> None:
+    st.markdown(
+        f'<div style="border-left:3px solid #FF4560;background:#0F1629;'
+        f'padding:12px 16px;border-radius:8px;margin:8px 0;">'
+        f'<span style="color:#FF4560;font-family:Rajdhani,sans-serif;font-weight:700;">'
+        f'Error &mdash; </span>'
+        f'<span style="color:#E8EDF5;font-family:Inter,sans-serif;font-size:0.88rem;">'
+        f'{msg}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def make_bit_bar(n_zeros: int, zero_color: str, free_color: str, total: int = 256) -> str:
+    n_zeros = max(0, min(n_zeros, total))
+    sq = "display:inline-block;width:4px;height:4px;margin:0.4px;border-radius:0.5px;"
+    zeros = f'<div style="{sq}background:{zero_color};"></div>' * n_zeros
+    free  = f'<div style="{sq}background:{free_color};"></div>' * (total - n_zeros)
+    return f'<div class="bit-bar">{zeros}{free}</div>'
+
+
+def fmt_time_ago(unix_ts: int) -> str:
+    delta = max(0, int(time.time()) - int(unix_ts))
+    if delta < 60:
+        return f"{delta}s ago"
+    m, s = divmod(delta, 60)
+    if m < 60:
+        return f"{m}m {s}s ago"
+    h, m = divmod(m, 60)
+    return f"{h}h {m}m ago"
+
+
+def custom_metric(label: str, value: str, value_color: str = "#E8EDF5",
+                  border_color: str = "#00C2FF") -> str:
+    return (
+        f'<div style="background:#0F1629;border:1px solid #1E2D5A;'
+        f'border-left:3px solid {border_color};border-radius:8px;padding:16px;'
+        f'transition:border-color 0.2s ease,box-shadow 0.2s ease,transform 0.15s ease;"'
+        f' onmouseover="this.style.borderColor=\'{border_color}80\';'
+        f'this.style.boxShadow=\'0 4px 22px rgba(0,194,255,0.09)\';'
+        f'this.style.transform=\'translateY(-2px)\'"'
+        f' onmouseout="this.style.borderColor=\'#1E2D5A\';'
+        f'this.style.boxShadow=\'none\';this.style.transform=\'none\'">'
+        f'<p style="font-family:Rajdhani,sans-serif;font-size:0.78rem;font-weight:400;'
+        f'color:#6B7DA0;margin:0 0 4px 0;text-transform:uppercase;letter-spacing:0.07em;">'
+        f'{label}</p>'
+        f'<p style="font-family:Rajdhani,sans-serif;font-size:1.55rem;font-weight:700;'
+        f'color:{value_color};margin:0;line-height:1.1;">'
+        f'{value}</p></div>'
+    )
+
+
+def module_header(title: str) -> None:
+    st.markdown(
+        f'<h2 style="font-family:\'Rajdhani\',sans-serif;font-weight:700;'
+        f'font-size:1.5rem;color:#E8EDF5;letter-spacing:0.05em;margin-bottom:4px;">'
+        f'{title}</h2>',
+        unsafe_allow_html=True,
+    )
+    st.markdown('<hr class="module-divider">', unsafe_allow_html=True)
+
+
+# ── Session state init ────────────────────────────────────────────────────────
+if "m2_hash" not in st.session_state:
+    try:
+        st.session_state["m2_hash"] = get_tip_hash()
+    except Exception:
+        st.session_state["m2_hash"] = ""
+
+# ── Auto-refresh ──────────────────────────────────────────────────────────────
+st_autorefresh(interval=60_000, key="main_refresh")
+
+# ── Hero Header ───────────────────────────────────────────────────────────────
+now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+st.markdown(f"""
+<div class="ph-wrap">
+    <div class="ph-bg"></div>
+    <canvas id="ph-canvas"></canvas>
+    <div class="ph-glow-c"></div>
+    <div class="ph-glow-l"></div>
+    <div class="ph-glow-r"></div>
+    <div class="ph-ghost">BLOCKCHAIN</div>
+    <div class="ph-glass">
+        <div class="ph-headline">
+            <span class="ph-btc-sym">&#x20BF;</span>
+            <span class="ph-sep">&mdash;</span>
+            <span class="ph-wordmark">CRYPTOCHAIN ANALYZER</span>
+        </div>
+        <div class="ph-divider"></div>
+        <p class="ph-t2">
+            BITCOIN BLOCKCHAIN ANALYTICS
+            <span class="ph-t2-sep">&middot;</span>
+            RUBEN ELICES RODRIGUEZ
+            <span class="ph-t2-sep">&middot;</span>
+            INGENIER&Iacute;A MATEM&Aacute;TICA
+        </p>
+        <div class="ph-status">
+            <span class="live-dot"></span>
+            <span class="ph-live-text">Live &middot; auto-refresh 60s</span>
+            <span class="ph-pipe">|</span>
+            <span class="ph-time-text">{now_str}</span>
+        </div>
+    </div>
+</div>
+<script>
+(function() {{
+    var canvas = document.getElementById('ph-canvas');
+    if (!canvas) return;
+    var ctx = canvas.getContext('2d');
+    var W, H;
+    var particles = [];
+    function resize() {{
+        W = canvas.offsetWidth; H = canvas.offsetHeight;
+        canvas.width = W; canvas.height = H;
+    }}
+    function Particle() {{
+        this.x = Math.random() * W;
+        this.y = Math.random() * H;
+        this.r = Math.random() * 1.5 + 0.4;
+        this.vx = (Math.random() - 0.5) * 0.25;
+        this.vy = (Math.random() - 0.5) * 0.25;
+        this.alpha = Math.random() * 0.35 + 0.05;
+    }}
+    Particle.prototype.update = function() {{
+        this.x += this.vx; this.y += this.vy;
+        if (this.x < 0) this.x = W;
+        if (this.x > W) this.x = 0;
+        if (this.y < 0) this.y = H;
+        if (this.y > H) this.y = 0;
+    }};
+    resize();
+    for (var i = 0; i < 45; i++) particles.push(new Particle());
+    function draw() {{
+        ctx.clearRect(0, 0, W, H);
+        particles.forEach(function(p) {{
+            p.update();
+            var g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r * 3);
+            g.addColorStop(0, 'rgba(0,180,255,' + p.alpha + ')');
+            g.addColorStop(1, 'rgba(0,80,200,0)');
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.r * 3, 0, Math.PI * 2);
+            ctx.fillStyle = g;
+            ctx.fill();
+        }});
+        requestAnimationFrame(draw);
+    }}
+    window.addEventListener('resize', resize);
+    draw();
+}})();
+</script>
+""", unsafe_allow_html=True)
+
+# ── Navigation pills (horizontal radio) ───────────────────────────────────────
+module = st.radio(
+    "Navigation",
+    options=[
+        "M1 — PoW Monitor",
+        "M2 — Block Header Analyzer",
+        "M3 — Difficulty History",
+    ],
+    horizontal=True,
+    label_visibility="collapsed",
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M1 — PROOF OF WORK MONITOR
+# ─────────────────────────────────────────────────────────────────────────────
+def render_m1() -> None:
+    module_header("M1 — PROOF OF WORK MONITOR")
+
+    try:
+        blocks = load_recent_blocks(50)
+    except Exception as e:
+        render_error(str(e))
+        return
+
+    if not blocks:
+        render_error("No block data returned from API.")
+        return
+
+    try:
+        latest     = blocks[0]
+        bits_int   = int(latest["bits"])
+        difficulty = float(latest["difficulty"])
+        target_int = bits_to_target(bits_int)
+        target_hex = f"{target_int:064x}"
+        hashrate   = estimate_hashrate(difficulty)
+
+        required_zero_bits = count_leading_zero_bits(target_hex)
+        block_hash         = latest["id"]
+        actual_zero_bits   = count_leading_zero_bits(block_hash)
+
+        inter_times = get_inter_block_times(blocks)
+        avg_time    = int(np.mean(inter_times)) if inter_times else 0
+
+        exponent    = bits_int >> 24
+        coefficient = bits_int & 0x007FFFFF
+    except Exception as e:
+        render_error(f"Computation error: {e}")
+        return
+
+    # ── Row 1: Top metrics ────────────────────────────────────────────────────
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Block Height",   f"{latest['height']:,}")
+    c2.metric("Difficulty",     f"{difficulty:.2e}")
+    c3.metric("Hash Rate",      f"{hashrate / 1e18:.1f} EH/s")
+    c4.metric("Required Zeros", f"{required_zero_bits} bits")
+    c5.metric("Avg Block Time", f"{avg_time} s")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Row 2: Histogram + Target card ───────────────────────────────────────
+    col_hist, col_card = st.columns([3, 2], gap="medium")
+
+    with col_hist:
+        st.markdown(
+            '<div class="card"><div class="card-title">Block Arrival Times — Poisson Process</div>',
+            unsafe_allow_html=True,
+        )
+        if len(inter_times) >= 2:
+            observed_mean = float(np.mean(inter_times))
+            x_max   = max(max(inter_times) * 1.1, 1500)
+            x_curve = np.linspace(0, x_max, 500)
+            lam     = 1 / 600
+            y_curve = lam * np.exp(-lam * x_curve)
+
+            fig = go.Figure()
+            fig.add_trace(go.Histogram(
+                x=inter_times,
+                histnorm="probability density",
+                nbinsx=20,
+                name="Observed inter-block times",
+                marker_color="rgba(0,194,255,0.70)",
+                marker_line=dict(color="rgba(0,194,255,0.9)", width=0.5),
+                hovertemplate="Interval: %{x:.0f}s<br>Density: %{y:.6f}<extra></extra>",
+            ))
+            fig.add_trace(go.Scatter(
+                x=x_curve, y=y_curve,
+                mode="lines",
+                name="Exp(λ=1/600s) theoretical",
+                line=dict(color="#F7931A", width=2.5),
+                hovertemplate="t=%{x:.0f}s<br>PDF=%{y:.7f}<extra></extra>",
+            ))
+            fig.add_annotation(
+                text="Expected: Exp(λ=1/600s) — Poisson process",
+                xref="paper", yref="paper",
+                x=0.98, y=0.97, showarrow=False,
+                font=dict(family="Rajdhani", size=11, color="#F7931A"),
+                align="right",
+            )
+            fig.add_annotation(
+                text=f"Observed mean: {observed_mean:.0f}s",
+                xref="paper", yref="paper",
+                x=0.03, y=0.91, showarrow=False,
+                bgcolor="#141C35",
+                bordercolor="#1CE87A", borderwidth=1, borderpad=6,
+                font=dict(family="Rajdhani", size=12, color="#1CE87A"),
+                align="left",
+            )
+            apply_chart_style(fig)
+            fig.update_layout(
+                xaxis_title="Seconds between blocks",
+                yaxis_title="Probability density",
+                showlegend=True,
+                legend=dict(
+                    x=0.98, y=0.82, xanchor="right",
+                    bgcolor="rgba(15,22,41,0.85)",
+                    bordercolor="#1E2D5A", borderwidth=1,
+                ),
+                height=340,
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.markdown(
+                "<p style='color:#6B7DA0;font-family:Inter,sans-serif;'>"
+                "Insufficient blocks for histogram.</p>",
+                unsafe_allow_html=True,
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_card:
+        st.markdown(
+            '<div class="card"><div class="card-title">SHA-256 Target Threshold</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p class="field-label">Target threshold (bits decoded):</p>'
+            f'<p class="field-val">{target_hex}</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p class="field-label">Latest block hash (SHA256d, big-endian):</p>'
+            f'<p class="field-val">{block_hash}</p>',
+            unsafe_allow_html=True,
+        )
+
+        target_bar = make_bit_bar(required_zero_bits, "#1E2D5A", "#00C2FF")
+        hash_bar   = make_bit_bar(actual_zero_bits,   "#1CE87A", "#00C2FF")
+        st.markdown(
+            f'<div style="margin:12px 0 4px 0;">{target_bar}{hash_bar}</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.74rem;color:#6B7DA0;'
+            'margin-top:7px;line-height:1.55;">'
+            '<strong style="color:#00C2FF;">Top</strong> = target threshold '
+            '(minimum zeros required). '
+            '<strong style="color:#1CE87A;">Bottom</strong> = actual block hash. '
+            'Each square = 1 bit of the 256-bit SHA-256 output space.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f'<p style="font-family:\'Share Tech Mono\',monospace;font-size:0.78rem;'
+            f'color:#6B7DA0;margin-top:12px;line-height:1.7;">'
+            f'bits = <span style="color:#00C2FF;">0x{bits_int:08x}</span><br>'
+            f'&nbsp;&nbsp;&rarr; exponent = <span style="color:#F7931A;">{exponent}</span><br>'
+            f'&nbsp;&nbsp;&rarr; coefficient = '
+            f'<span style="color:#F7931A;">0x{coefficient:06x}</span></p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Row 3: Latest blocks table ────────────────────────────────────────────
+    st.markdown(
+        '<div class="card"><div class="card-title">Latest Blocks</div>',
+        unsafe_allow_html=True,
+    )
+    th = (
+        "padding:8px 12px;text-align:left;font-family:Rajdhani,sans-serif;"
+        "font-size:0.72rem;color:#6B7DA0;text-transform:uppercase;"
+        "letter-spacing:0.08em;border-bottom:2px solid #1E2D5A;"
+    )
+    header_row = (
+        '<table style="width:100%;border-collapse:collapse;"><thead><tr>'
+        + "".join(f'<th style="{th}">{c}</th>'
+                  for c in ["Height", "Hash", "Nonce", "Transactions", "Time ago"])
+        + "</tr></thead><tbody>"
+    )
+    body_rows = []
+    for b in blocks[:15]:
+        h_short = b["id"][:20] + "..."
+        body_rows.append(
+            "<tr"
+            " onmouseover=\"this.style.background='rgba(0,194,255,0.04)'\""
+            " onmouseout=\"this.style.background='transparent'\">"
+            f'<td style="padding:8px 12px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-weight:600;color:#E8EDF5;">'
+            f'{b["height"]:,}</td>'
+            f'<td style="padding:8px 12px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:\'Share Tech Mono\',monospace;color:#00C2FF;font-size:0.82rem;">'
+            f'{h_short}</td>'
+            f'<td style="padding:8px 12px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;color:#E8EDF5;">'
+            f'{int(b["nonce"]):,}</td>'
+            f'<td style="padding:8px 12px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;color:#E8EDF5;">'
+            f'{b.get("tx_count","—")}</td>'
+            f'<td style="padding:8px 12px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;color:#6B7DA0;">'
+            f'{fmt_time_ago(b["timestamp"])}</td>'
+            "</tr>"
+        )
+    st.markdown(
+        header_row + "".join(body_rows) + "</tbody></table>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M2 — BLOCK HEADER ANALYZER
+# ─────────────────────────────────────────────────────────────────────────────
+def render_m2() -> None:
+    module_header("M2 — BLOCK HEADER ANALYZER")
+
+    block_hash = st.text_input(
+        "Block hash to analyze:",
+        key="m2_hash",
+        placeholder="Enter a 64-character block hash...",
+    )
+
+    if not block_hash or len(block_hash) != 64:
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.85rem;color:#6B7DA0;">'
+            'Enter a valid 64-character block hash above to begin analysis.</p>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    try:
+        header_hex = load_block_header_hex(block_hash)
+    except Exception as e:
+        render_error(f"Could not fetch block header: {e}")
+        return
+
+    try:
+        block_data = load_block_data(block_hash)
+    except Exception as e:
+        render_error(f"Could not fetch block data: {e}")
+        return
+
+    try:
+        fields  = parse_header(header_hex)
+        pow_res = verify_proof_of_work(header_hex)
+    except Exception as e:
+        render_error(f"Header parse/verify error: {e}")
+        return
+
+    difficulty = float(block_data.get("difficulty", 0))
+    hashrate   = estimate_hashrate(difficulty)
+    pow_valid  = pow_res["pow_valid"]
+    computed   = pow_res["computed_hash"]
+    target_hex = pow_res["target_hex"]
+    zero_bits  = pow_res["leading_zero_bits"]
+
+    # ── Row 1: Info bar ───────────────────────────────────────────────────────
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Block Height", f'{block_data.get("height", "?"):,}')
+    c2.metric("Hash Rate",    f"{hashrate / 1e18:.1f} EH/s")
+
+    pow_color  = "#1CE87A" if pow_valid else "#FF4560"
+    pow_value  = "✓ VALID" if pow_valid else "✗ INVALID"
+    pow_border = "#1CE87A" if pow_valid else "#FF4560"
+    with c3:
+        st.markdown(custom_metric("PoW Status", pow_value, pow_color, pow_border),
+                    unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Row 2: Raw header card + Header fields card ───────────────────────────
+    col_raw, col_fields = st.columns(2, gap="medium")
+
+    SEG_COLORS = {
+        "version":     "#5A6A8A",
+        "prev_hash":   "#00C2FF",
+        "merkle_root": "#F7931A",
+        "timestamp":   "#1CE87A",
+        "bits":        "#FF4560",
+        "nonce":       "#A855F7",
+    }
+    SEGMENTS = [
+        ("version",     8,  "version",     0,  4),
+        ("prev_hash",   64, "prev_hash",   4,  32),
+        ("merkle_root", 64, "merkle_root", 36, 32),
+        ("timestamp",   8,  "timestamp",   68, 4),
+        ("bits",        8,  "bits",        72, 4),
+        ("nonce",       8,  "nonce",       76, 4),
+    ]
+
+    with col_raw:
+        st.markdown(
+            '<div class="card"><div class="card-title">Raw Header (80 bytes)</div>',
+            unsafe_allow_html=True,
+        )
+        colored_hex = ""
+        cursor = 0
+        for field, char_len, _, _, _ in SEGMENTS:
+            chunk = header_hex[cursor: cursor + char_len]
+            colored_hex += (
+                f'<span style="color:{SEG_COLORS[field]};" title="{field}">{chunk}</span>'
+            )
+            cursor += char_len
+
+        st.markdown(
+            f'<div style="font-family:\'Share Tech Mono\',monospace;font-size:0.78rem;'
+            f'line-height:1.65;word-break:break-all;background:#141C35;padding:12px 14px;'
+            f'border-radius:7px;border:1px solid #1E2D5A;">{colored_hex}</div>',
+            unsafe_allow_html=True,
+        )
+
+        legend_rows = "".join(
+            f'<tr onmouseover="this.style.background=\'rgba(0,194,255,0.03)\'"'
+            f' onmouseout="this.style.background=\'transparent\'">'
+            f'<td style="padding:4px 8px;font-family:Rajdhani,sans-serif;'
+            f'color:{SEG_COLORS[field]};font-weight:600;font-size:0.82rem;">{label}</td>'
+            f'<td style="padding:4px 8px;font-family:\'Share Tech Mono\',monospace;'
+            f'font-size:0.73rem;">'
+            f'<span style="background:{SEG_COLORS[field]}28;padding:1px 7px;'
+            f'border-radius:3px;color:{SEG_COLORS[field]};">{SEG_COLORS[field]}</span></td>'
+            f'<td style="padding:4px 8px;font-family:Rajdhani,sans-serif;'
+            f'color:#6B7DA0;font-size:0.8rem;">byte {offset}</td>'
+            f'<td style="padding:4px 8px;font-family:Rajdhani,sans-serif;'
+            f'color:#6B7DA0;font-size:0.8rem;">{blen} B</td>'
+            f'</tr>'
+            for field, _, label, offset, blen in SEGMENTS
+        )
+        th_s = (
+            "padding:4px 8px;text-align:left;font-family:Rajdhani,sans-serif;"
+            "font-size:0.7rem;color:#6B7DA0;text-transform:uppercase;"
+            "letter-spacing:0.08em;border-bottom:1px solid #1E2D5A;"
+        )
+        st.markdown(
+            f'<table style="width:100%;border-collapse:collapse;margin-top:14px;">'
+            f'<thead><tr>'
+            + "".join(f'<th style="{th_s}">{h}</th>' for h in ["Field", "Color", "Offset", "Size"])
+            + f'</tr></thead><tbody>{legend_rows}</tbody></table>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_fields:
+        st.markdown(
+            '<div class="card"><div class="card-title">Header Fields</div>',
+            unsafe_allow_html=True,
+        )
+        version     = fields["version"]
+        prev_hash   = fields["prev_hash"]
+        merkle_root = fields["merkle_root"]
+        ts          = fields["timestamp"]
+        bits_f      = fields["bits"]
+        nonce_f     = fields["nonce"]
+
+        exp_f   = bits_f >> 24
+        coeff_f = bits_f & 0x007FFFFF
+        ts_iso  = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+        def trunc(h: str) -> str:
+            return h[:20] + "..." + h[-8:]
+
+        field_rows = [
+            ("Version",     f"0x{version:08x}  (decimal: {version})"),
+            ("Prev Hash",   trunc(prev_hash)),
+            ("Merkle Root", trunc(merkle_root)),
+            ("Timestamp",   f"{ts}  →  {ts_iso}"),
+            ("Bits",        f"0x{bits_f:08x}  →  exp={exp_f}, coeff=0x{coeff_f:06x}"),
+            ("Nonce",       f"{nonce_f:,}  (0x{nonce_f:08x})"),
+        ]
+        html_fields = "".join(
+            f'<p class="field-label">{lbl}</p><p class="field-val">{val}</p>'
+            for lbl, val in field_rows
+        )
+        st.markdown(html_fields, unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Row 3: PoW Verification pipeline ─────────────────────────────────────
+    st.markdown(
+        '<div class="card"><div class="card-title">'
+        'Manual PoW Verification — hashlib.sha256</div>',
+        unsafe_allow_html=True,
+    )
+
+    raw_bytes    = bytes.fromhex(header_hex)
+    intermediate = hashlib.sha256(raw_bytes).hexdigest()
+
+    step_bg1 = "background:#141C35;border:1px solid #1E2D5A;"
+    step_bg2 = "background:rgba(0,194,255,0.07);border:1px solid rgba(0,194,255,0.28);"
+    step_bg3 = (
+        "background:rgba(28,232,122,0.09);border:1px solid rgba(28,232,122,0.45);"
+        if pow_valid else
+        "background:rgba(255,69,96,0.09);border:1px solid rgba(255,69,96,0.45);"
+    )
+    step3_color = "#1CE87A" if pow_valid else "#FF4560"
+
+    col_s1, col_a1, col_s2, col_a2, col_s3 = st.columns([10, 1, 10, 1, 10], gap="small")
+
+    with col_s1:
+        st.markdown(
+            f'<div class="pow-step" style="{step_bg1}">'
+            f'<div class="pow-step-label" style="color:#6B7DA0;">Step 1 — 80-byte header</div>'
+            f'<div class="pow-step-value" style="color:#6B7DA0;">'
+            f'{header_hex[:32]}...'
+            f'</div></div>',
+            unsafe_allow_html=True,
+        )
+    with col_a1:
+        st.markdown('<div class="pow-arrow">&rarr;</div>', unsafe_allow_html=True)
+    with col_s2:
+        st.markdown(
+            f'<div class="pow-step" style="{step_bg2}">'
+            f'<div class="pow-step-label" style="color:#00C2FF;">'
+            f'Step 2 — SHA256(SHA256(&middot;))</div>'
+            f'<div class="pow-step-value" style="color:#00C2FF;">'
+            f'{intermediate[:32]}...'
+            f'<br><span style="color:#6B7DA0;font-size:0.68rem;">(first SHA256 pass)</span>'
+            f'</div></div>',
+            unsafe_allow_html=True,
+        )
+    with col_a2:
+        st.markdown('<div class="pow-arrow">&rarr;</div>', unsafe_allow_html=True)
+    with col_s3:
+        st.markdown(
+            f'<div class="pow-step" style="{step_bg3}">'
+            f'<div class="pow-step-label" style="color:{step3_color};">'
+            f'Step 3 — Block Hash (reversed to big-endian)</div>'
+            f'<div class="pow-step-value" style="color:{step3_color};">'
+            f'{computed}'
+            f'<br><span style="color:#6B7DA0;font-size:0.68rem;">'
+            f'bytes[::-1].hex() &mdash; little-endian &rarr; big-endian display</span>'
+            f'</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Hash < Target comparison
+    st.markdown(
+        '<p style="font-family:Rajdhani,sans-serif;font-weight:600;font-size:0.8rem;'
+        'color:#6B7DA0;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px;">'
+        'Hash &lt; Target? &mdash; first differing position highlighted</p>',
+        unsafe_allow_html=True,
+    )
+
+    first_diff = next(
+        (i for i, (ch, ct) in enumerate(zip(computed, target_hex)) if ch != ct),
+        -1,
+    )
+
+    def build_cmp_str(s: str, is_hash: bool) -> str:
+        parts = []
+        for i, ch in enumerate(s):
+            if i < first_diff or first_diff == -1:
+                parts.append(f'<span style="color:#2E3E60;">{ch}</span>')
+            elif i == first_diff:
+                color = "#FF4560" if is_hash else "#1CE87A"
+                parts.append(
+                    f'<span style="color:{color};font-weight:700;'
+                    f'text-decoration:underline;">{ch}</span>'
+                )
+            else:
+                parts.append(f'<span style="color:#7888A8;">{ch}</span>')
+        return "".join(parts)
+
+    hash_cmp   = build_cmp_str(computed,   is_hash=True)
+    target_cmp = build_cmp_str(target_hex, is_hash=False)
+
+    st.markdown(
+        f'<div style="background:#141C35;border:1px solid #1E2D5A;border-radius:7px;'
+        f'padding:12px 14px;font-family:\'Share Tech Mono\',monospace;'
+        f'font-size:0.77rem;line-height:2.3;word-break:break-all;">'
+        f'<div style="margin-bottom:2px;">'
+        f'<span style="color:#4A5E88;font-size:0.68rem;font-family:Rajdhani,sans-serif;'
+        f'text-transform:uppercase;letter-spacing:0.07em;">hash&nbsp;&nbsp;&nbsp;:</span>'
+        f'&nbsp;{hash_cmp}</div>'
+        f'<div><span style="color:#4A5E88;font-size:0.68rem;font-family:Rajdhani,sans-serif;'
+        f'text-transform:uppercase;letter-spacing:0.07em;">target:</span>'
+        f'&nbsp;{target_cmp}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    banner_class = "result-valid" if pow_valid else "result-invalid"
+    banner_text  = "✓ PROOF OF WORK VERIFIED" if pow_valid else "✗ PROOF OF WORK INVALID"
+    st.markdown(f'<div class="{banner_class}">{banner_text}</div>', unsafe_allow_html=True)
+
+    st.markdown(
+        f'<p style="font-family:Rajdhani,sans-serif;font-size:0.85rem;color:#6B7DA0;'
+        f'margin-bottom:4px;">{zero_bits} / 256 leading bits are zero</p>',
+        unsafe_allow_html=True,
+    )
+    st.progress(min(zero_bits / 256, 1.0))
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M3 — DIFFICULTY HISTORY
+# ─────────────────────────────────────────────────────────────────────────────
+def render_m3() -> None:
+    module_header("M3 — DIFFICULTY HISTORY")
+
+    # Slider — inline in M3 content
+    col_sl, col_sp = st.columns([2, 5])
+    with col_sl:
+        n_periods = st.slider(
+            "Adjustment periods",
+            min_value=5, max_value=20, value=12,
+            key="m3_n_periods",
+            on_change=_clear_adj_cache,
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    try:
+        blocks = load_adjustment_blocks(n_periods)
+    except Exception as e:
+        render_error(f"Could not fetch adjustment blocks: {e}")
+        return
+
+    if not blocks:
+        render_error("No adjustment data returned.")
+        return
+
+    try:
+        df = build_adjustment_dataframe(blocks)
+    except Exception as e:
+        render_error(f"DataFrame build error: {e}")
+        return
+
+    if df.empty:
+        render_error("Empty adjustment DataFrame.")
+        return
+
+    latest    = df.iloc[-1]
+    cur_diff  = float(latest["difficulty"])
+    last_pct  = latest["pct_change"]
+    last_ratio = latest["ratio"]
+    next_diff  = latest["next_difficulty"]
+
+    # ── Row 1: Summary metrics ────────────────────────────────────────────────
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Current Difficulty", f"{cur_diff:.3e}")
+
+    pct_val   = f"{last_pct:+.2f}%" if not pd.isna(last_pct) else "N/A"
+    pct_color = (
+        "#1CE87A" if not pd.isna(last_pct) and last_pct > 0 else
+        "#FF4560" if not pd.isna(last_pct) and last_pct < 0 else
+        "#6B7DA0"
+    )
+    pct_border = pct_color if pct_color != "#6B7DA0" else "#00C2FF"
+    with c2:
+        st.markdown(custom_metric("Last Adj. Change", pct_val, pct_color, pct_border),
+                    unsafe_allow_html=True)
+
+    if not pd.isna(last_ratio):
+        arrow       = " ↑" if last_ratio > 1 else " ↓"
+        ratio_str   = f"{last_ratio:.4f}{arrow}"
+        ratio_color = "#00C2FF" if last_ratio > 1 else "#FF4560"
+    else:
+        ratio_str = "N/A"; ratio_color = "#6B7DA0"
+    with c3:
+        st.markdown(custom_metric("Last Period Ratio", ratio_str, ratio_color, ratio_color if ratio_color != "#6B7DA0" else "#00C2FF"),
+                    unsafe_allow_html=True)
+
+    next_str = f"{float(next_diff):.3e}" if next_diff is not None and not pd.isna(next_diff) else "N/A"
+    c4.metric("Next Predicted Diff.", next_str)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Row 2: Difficulty line chart ──────────────────────────────────────────
+    st.markdown(
+        '<div class="card"><div class="card-title">'
+        'Bitcoin Mining Difficulty — Adjustment History</div>',
+        unsafe_allow_html=True,
+    )
+    df_plot = df.dropna(subset=["date", "difficulty"])
+    if not df_plot.empty:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df_plot["date"],
+            y=df_plot["difficulty"],
+            mode="lines+markers",
+            name="Difficulty",
+            line=dict(color="#00C2FF", width=2),
+            fill="tozeroy",
+            fillcolor="rgba(0,194,255,0.05)",
+            marker=dict(symbol="diamond", color="#F7931A", size=10),
+            customdata=df_plot["pct_change"].fillna(0).values,
+            hovertemplate=(
+                "<b>%{x|%Y-%m-%d}</b><br>"
+                "Difficulty: %{y:.3e}<br>"
+                "Change: %{customdata:+.2f}%"
+                "<extra></extra>"
+            ),
+        ))
+        apply_chart_style(fig)
+        fig.update_layout(
+            xaxis_title="Date",
+            yaxis_title="Difficulty",
+            showlegend=False,
+            height=360,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Row 3: Ratio chart + Summary table ────────────────────────────────────
+    col_ratio, col_table = st.columns(2, gap="medium")
+
+    with col_ratio:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Actual / Target Period Duration</div>',
+            unsafe_allow_html=True,
+        )
+        df_ratio = df.dropna(subset=["ratio", "date"])
+        if not df_ratio.empty:
+            bar_colors = ["#1CE87A" if r >= 1 else "#FF4560" for r in df_ratio["ratio"]]
+            fig2 = go.Figure()
+            fig2.add_trace(go.Bar(
+                x=df_ratio["date"],
+                y=df_ratio["ratio"],
+                name="Period ratio",
+                marker_color=bar_colors,
+                hovertemplate="<b>%{x|%Y-%m-%d}</b><br>Ratio: %{y:.4f}<extra></extra>",
+            ))
+            fig2.add_hline(
+                y=1.0,
+                line_dash="dash",
+                line_color="#6B7DA0",
+                annotation_text="Target (600s)",
+                annotation_font=dict(family="Rajdhani", color="#6B7DA0", size=11),
+                annotation_position="top right",
+            )
+            apply_chart_style(fig2)
+            fig2.update_layout(
+                xaxis_title="Adjustment date",
+                yaxis_title="Actual / Target period duration",
+                showlegend=False,
+                height=320,
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+            st.caption(
+                "ratio < 1: blocks faster than 600s target → next difficulty INCREASES. "
+                "ratio > 1: blocks slower → difficulty DECREASES."
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_table:
+        st.markdown(
+            '<div class="card"><div class="card-title">Adjustment Summary</div>',
+            unsafe_allow_html=True,
+        )
+        display_cols = ["height", "date", "difficulty", "pct_change", "ratio", "next_difficulty"]
+        df_tbl = df[display_cols].copy()
+        df_tbl["date"] = df_tbl["date"].dt.strftime("%Y-%m-%d")
+
+        th_s = (
+            "padding:6px 10px;text-align:left;font-family:Rajdhani,sans-serif;"
+            "font-size:0.7rem;color:#6B7DA0;text-transform:uppercase;"
+            "letter-spacing:0.08em;border-bottom:2px solid #1E2D5A;"
+        )
+        headers = ["Height", "Date", "Difficulty", "Change %", "Ratio", "Next Pred."]
+        thead   = (
+            "<thead><tr>"
+            + "".join(f'<th style="{th_s}">{h}</th>' for h in headers)
+            + "</tr></thead>"
+        )
+
+        def td(val_str: str, color: str = "#E8EDF5") -> str:
+            return (
+                f'<td style="padding:6px 10px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:Rajdhani,sans-serif;font-size:0.85rem;color:{color};">'
+                f'{val_str}</td>'
+            )
+
+        tbody_rows = []
+        for _, row in df_tbl.iterrows():
+            pct_v   = row["pct_change"]
+            ratio_v = row["ratio"]
+            next_v  = row["next_difficulty"]
+
+            pct_c   = "#1CE87A" if not pd.isna(pct_v) and pct_v > 0 else "#FF4560" if not pd.isna(pct_v) and pct_v < 0 else "#6B7DA0"
+            ratio_c = "#FF4560" if not pd.isna(ratio_v) and ratio_v < 1 else "#00C2FF" if not pd.isna(ratio_v) else "#6B7DA0"
+
+            tbody_rows.append(
+                "<tr"
+                " onmouseover=\"this.style.background='rgba(0,194,255,0.04)'\""
+                " onmouseout=\"this.style.background='transparent'\">"
+                + td(f'{int(row["height"]):,}')
+                + td(str(row["date"]), "#6B7DA0")
+                + td(f'{float(row["difficulty"]):.3e}')
+                + td(f'{pct_v:+.2f}%' if not pd.isna(pct_v) else "—", pct_c)
+                + td(f'{ratio_v:.4f}' if not pd.isna(ratio_v) else "—", ratio_c)
+                + td(f'{float(next_v):.3e}' if next_v is not None and not pd.isna(next_v) else "—")
+                + "</tr>"
+            )
+
+        st.markdown(
+            f'<div style="overflow-x:auto;">'
+            f'<table style="width:100%;border-collapse:collapse;">'
+            f'{thead}<tbody>{"".join(tbody_rows)}</tbody>'
+            f'</table></div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ── Module routing ─────────────────────────────────────────────────────────────
+if module == "M1 — PoW Monitor":
     render_m1()
-
-with tab2:
+elif module == "M2 — Block Header Analyzer":
     render_m2()
-
-with tab3:
+elif module == "M3 — Difficulty History":
     render_m3()
-
-with tab4:
-    render_m4()

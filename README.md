@@ -18,18 +18,24 @@ Use one of these values: `Not started`, `In progress`, `Done`
 
 | Module | What it should include | Status |
 |---|---|---|
-| M1 | Proof of Work Monitor | In progress |
-| M2 | Block Header Analyzer | Not started |
-| M3 | Difficulty History | Not started |
-| M4 | AI Component | Not started |
+| M1 | Proof of Work Monitor | Done |
+| M2 | Block Header Analyzer | Done |
+| M3 | Difficulty History | Done |
+| M4 | AI Component | In progress |
 
 ## Current Progress
 
-- Session 1 done: repo set up, README updated, API client connected to Blockstream and returning real Bitcoin data (height, hash, nonce, bits, difficulty, tx count).
+- M1, M2, M3 complete with Streamlit dashboard. Tested with real Bitcoin data from Blockstream API.
+- Dashboard features: dark theme, crypto color palette, live data refresh (60s), interactive Plotly charts.
+- M1: difficulty visualization, hash rate, inter-block time histogram.
+- M2: block header parsing, manual PoW verification with hashlib, leading zero bits count.
+- M3: difficulty adjustment history, period ratios, aggregate statistics.
+- API client expanded: get_block_header_hex, get_block_txids, get_block_by_height.
 
 ## Next Step
 
-- Implement M1: build the Streamlit PoW Monitor panel with live difficulty, leading-zero visualisation, block time histogram, and estimated hash rate.
+- Implement M4 AI component (Anomaly Detector on inter-arrival times).
+- Add optional modules M5, M6, M7.
 
 ## Main Problem or Blocker
 

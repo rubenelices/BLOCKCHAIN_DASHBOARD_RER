@@ -4,3 +4,8 @@ __pycache__/
 .env
 .pytest_cache/
 .DS_Store
+
+# Meta / IA (contexto privado, no se sube)
+CLAUDE.md
+PLAN.md
+prompts/
