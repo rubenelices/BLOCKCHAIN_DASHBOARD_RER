@@ -74,11 +74,11 @@ Review time: 2026-04-29 20:44 CEST
 Status: Amber
 
 Strength:
-- M2 already includes concrete block-header analysis work.
+- The dashboard already integrates M1, M2, and M3 clearly in app.py.
 
 Improve now:
-- I do not yet see a clear dashboard integration for M1, M2, M3, and M4 in app.py.
+- M4 is not yet visibly integrated into the dashboard navigation.
 
 Next step:
-- Make sure app.py visibly integrates M1, M2, M3, and M4 in the dashboard navigation.
+- Add a visible M4 entry in app.py so the AI module skeleton is also accessible from the dashboard.
 <!-- student-repo-auditor:teacher-feedback:end -->
