@@ -21,7 +21,7 @@ Use one of these values: `Not started`, `In progress`, `Done`
 | M1 | Proof of Work Monitor | Done |
 | M2 | Block Header Analyzer | Done |
 | M3 | Difficulty History | Done |
-| M4 | AI Component | In progress |
+| M4 | AI Component | Done |
 
 ## Current Progress
 
@@ -30,12 +30,14 @@ Use one of these values: `Not started`, `In progress`, `Done`
 - M1: difficulty visualization, hash rate, inter-block time histogram.
 - M2: block header parsing, manual PoW verification with hashlib, leading zero bits count.
 - M3: difficulty adjustment history, period ratios, aggregate statistics.
+- M4: anomaly detector on Bitcoin block inter-arrival times using an exponential baseline and IsolationForest.
+- M4 evaluation: KS goodness-of-fit test plus synthetic anomaly precision, recall, and F1-score.
 - API client expanded: get_block_header_hex, get_block_txids, get_block_by_height.
 
 ## Next Step
 
-- Implement M4 AI component (Anomaly Detector on inter-arrival times).
-- Add optional modules M5, M6, M7.
+- Implement optional modules M5, M6, and M7.
+- Add final report in report/report.pdf before the deadline.
 
 ## Main Problem or Blocker
 

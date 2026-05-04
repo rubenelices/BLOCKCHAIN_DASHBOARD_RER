@@ -32,10 +32,7 @@ def get_block_blockstream(block_hash: str) -> dict:
 
 def get_recent_blocks(count: int = 10) -> list[dict]:
     """Return the *count* most recent blocks from Blockstream."""
-    tip_hash = get_tip_hash()
-    response = requests.get(f"{BLOCKSTREAM_URL}/blocks/{tip_hash}", timeout=10)
-    response.raise_for_status()
-    return response.json()[:count]
+    return get_blocks_paginated(count)
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +75,33 @@ def get_block_by_height(height: int) -> dict:
     hash_resp.raise_for_status()
     block_hash = hash_resp.text.strip()
     return get_block_blockstream(block_hash)
+
+
+def get_blocks_paginated(n_blocks: int = 500) -> list[dict]:
+    """Fetch approximately n_blocks most recent blocks via Blockstream pagination.
+
+    Blockstream returns 10 blocks per call to /blocks/{start_height}.
+    We walk backwards from the chain tip until we have enough blocks.
+    """
+    tip_resp = requests.get(f"{BLOCKSTREAM_URL}/blocks/tip/height", timeout=10)
+    tip_resp.raise_for_status()
+    current_height = int(tip_resp.text.strip())
+
+    blocks = []
+    while len(blocks) < n_blocks:
+        resp = requests.get(
+            f"{BLOCKSTREAM_URL}/blocks/{current_height}", timeout=15
+        )
+        resp.raise_for_status()
+        page = resp.json()
+        if not page:
+            break
+        blocks.extend(page)
+        current_height = min(b["height"] for b in page) - 1
+        if current_height < 0:
+            break
+
+    return blocks[:n_blocks]
 
 
 def get_difficulty_history(n_points: int = 100) -> list[dict]:

@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from scipy import stats
 from streamlit_autorefresh import st_autorefresh
 
 # ── Page config — MUST be the very first Streamlit call ──────────────────────
@@ -41,11 +42,23 @@ st.markdown("""
 /* ── App & background ── */
 .stApp,
 [data-testid="stAppViewContainer"],
-[data-testid="stMain"],
-[data-testid="block-container"] {
-    background-color: var(--bg-dark) !important;
+[data-testid="stMain"] {
+    background: linear-gradient(180deg, #000000 0%, #000000 30%, #030d1c 60%, #091828 85%, #0A1830 100%) !important;
 }
-section.main > div { background-color: var(--bg-dark) !important; }
+/* Kill every Streamlit wrapper that could add a box */
+section.main > div,
+[data-testid="stBlock"],
+[data-testid="stVerticalBlock"],
+[data-testid="stHorizontalBlock"],
+[data-testid="stBlockContainer"],
+[data-testid="block-container"],
+[data-testid="element-container"],
+.block-container,
+.main .block-container {
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+}
 
 /* Hide sidebar toggle and collapsed sidebar */
 [data-testid="collapsedControl"] { display: none !important; }
@@ -165,22 +178,19 @@ hr { border-color: var(--border) !important; opacity: 0.5; }
 }
 .ph-wrap {
     position: relative;
-    border-radius: 16px;
-    border: 1px solid rgba(0,100,200,0.22);
+    border-radius: 0;
+    border: none;
     overflow: hidden;
     margin-bottom: 0;
-    box-shadow:
-        0 0 0 1px rgba(0,194,255,0.04),
-        0 0 60px rgba(0,80,180,0.14),
-        0 20px 60px rgba(0,0,0,0.5);
+    box-shadow: none;
 }
 .ph-bg {
     position: absolute;
     inset: 0;
-    background: #050b18;
+    background: transparent;
     background-image:
-        linear-gradient(rgba(0,70,150,0.06) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(0,70,150,0.06) 1px, transparent 1px);
+        linear-gradient(rgba(0,70,150,0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,70,150,0.035) 1px, transparent 1px);
     background-size: 40px 40px;
 }
 #ph-canvas {
@@ -193,8 +203,8 @@ hr { border-color: var(--border) !important; opacity: 0.5; }
     position: absolute;
     top: -40%; left: 50%;
     transform: translateX(-50%);
-    width: 900px; height: 500px;
-    background: radial-gradient(ellipse, rgba(0,150,255,0.055) 0%, transparent 60%);
+    width: 1100px; height: 600px;
+    background: radial-gradient(ellipse, rgba(0,150,255,0.09) 0%, transparent 60%);
     pointer-events: none; z-index: 2;
 }
 .ph-glow-l {
@@ -214,10 +224,10 @@ hr { border-color: var(--border) !important; opacity: 0.5; }
 .ph-glass {
     position: relative;
     z-index: 3;
-    background: linear-gradient(160deg, rgba(8,16,36,0.85) 0%, rgba(5,11,24,0.78) 100%);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
-    padding: 44px 56px 36px;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    padding: 56px 56px 46px;
     text-align: center;
 }
 .ph-headline {
@@ -225,11 +235,11 @@ hr { border-color: var(--border) !important; opacity: 0.5; }
     align-items: center;
     justify-content: center;
     font-family: 'Rajdhani', sans-serif;
-    font-size: 4.6rem;
+    font-size: 6.2rem;
     font-weight: 900;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.16em;
     line-height: 1;
-    margin: 0 0 14px 0;
+    margin: 0 0 18px 0;
 }
 .ph-btc-sym {
     color: #F7931A;
@@ -257,12 +267,12 @@ hr { border-color: var(--border) !important; opacity: 0.5; }
 }
 .ph-ghost {
     position: absolute;
-    bottom: -14px; left: 50%;
+    bottom: -18px; left: 50%;
     transform: translateX(-50%);
     font-family: 'Rajdhani', sans-serif;
-    font-size: 7rem; font-weight: 900;
+    font-size: 9.5rem; font-weight: 900;
     letter-spacing: 0.3em;
-    color: rgba(0,80,160,0.035);
+    color: rgba(0,80,160,0.03);
     white-space: nowrap;
     pointer-events: none; user-select: none;
     z-index: 2;
@@ -410,17 +420,48 @@ div[role="radiogroup"] label p {
     color: var(--accent-blue);
     margin: 0 0 14px 0;
     padding-bottom: 9px;
-    border-bottom: 1px solid var(--border);
+    border: none;
+    border-bottom: 1px solid transparent;
+    background-image: linear-gradient(90deg, rgba(0,194,255,0.5) 0%, rgba(0,194,255,0.12) 60%, transparent 100%);
+    background-size: 100% 1px;
+    background-repeat: no-repeat;
+    background-position: bottom;
     text-transform: uppercase;
     letter-spacing: 0.1em;
 }
 
-/* ── Module divider ── */
+/* ── Module divider — glowing line under every module title ── */
 .module-divider {
+    position: relative;
     border: none;
-    border-top: 1px solid var(--accent-blue);
-    margin: 2px 0 22px 0;
-    opacity: 0.28;
+    height: 1px;
+    background: linear-gradient(90deg, transparent 0%, rgba(0,160,255,0.15) 15%, rgba(0,194,255,0.65) 50%, rgba(0,160,255,0.15) 85%, transparent 100%);
+    margin: 4px 0 24px 0;
+}
+.module-divider::after {
+    content: '';
+    position: absolute;
+    top: -2px; left: 50%;
+    transform: translateX(-50%);
+    width: 100px; height: 5px;
+    background: radial-gradient(ellipse, rgba(0,194,255,0.55) 0%, transparent 70%);
+}
+
+/* ── Section separator — narrower glowing line between content blocks ── */
+.glow-sep {
+    position: relative;
+    border: none;
+    height: 1px;
+    background: linear-gradient(90deg, transparent 0%, rgba(0,160,255,0.08) 20%, rgba(0,194,255,0.30) 50%, rgba(0,160,255,0.08) 80%, transparent 100%);
+    margin: 22px 0;
+}
+.glow-sep::after {
+    content: '';
+    position: absolute;
+    top: -2px; left: 50%;
+    transform: translateX(-50%);
+    width: 60px; height: 4px;
+    background: radial-gradient(ellipse, rgba(0,194,255,0.35) 0%, transparent 70%);
 }
 
 /* ── Field label / value ── */
@@ -528,6 +569,14 @@ from modules.m1_pow_monitor import (
 )
 from modules.m2_block_header import parse_header, verify_proof_of_work
 from modules.m3_difficulty_history import build_adjustment_dataframe, fetch_adjustment_blocks
+from modules.m4_ai_component import (
+    build_inter_arrival_df,
+    detect_isolation_forest,
+    detect_statistical,
+    evaluate_synthetic_anomalies,
+    fit_exponential,
+)
+from api.blockchain_client import get_blocks_paginated
 
 # ── Cached API wrappers ───────────────────────────────────────────────────────
 
@@ -553,6 +602,11 @@ def load_adjustment_blocks(n_periods: int) -> list[dict]:
 
 def _clear_adj_cache() -> None:
     load_adjustment_blocks.clear()
+
+
+@st.cache_data(ttl=3600)
+def load_m4_blocks(n_blocks: int) -> list[dict]:
+    return get_blocks_paginated(n_blocks)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -729,6 +783,7 @@ module = st.radio(
         "M1 — PoW Monitor",
         "M2 — Block Header Analyzer",
         "M3 — Difficulty History",
+        "M4 — Anomaly Detector",
     ],
     horizontal=True,
     label_visibility="collapsed",
@@ -780,7 +835,7 @@ def render_m1() -> None:
     c4.metric("Required Zeros", f"{required_zero_bits} bits")
     c5.metric("Avg Block Time", f"{avg_time} s")
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
 
     # ── Row 2: Histogram + Target card ───────────────────────────────────────
     col_hist, col_card = st.columns([3, 2], gap="medium")
@@ -893,7 +948,7 @@ def render_m1() -> None:
         )
         st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
 
     # ── Row 3: Latest blocks table ────────────────────────────────────────────
     st.markdown(
@@ -1000,7 +1055,7 @@ def render_m2() -> None:
         st.markdown(custom_metric("PoW Status", pow_value, pow_color, pow_border),
                     unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
 
     # ── Row 2: Raw header card + Header fields card ───────────────────────────
     col_raw, col_fields = st.columns(2, gap="medium")
@@ -1107,7 +1162,7 @@ def render_m2() -> None:
         st.markdown(html_fields, unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
 
     # ── Row 3: PoW Verification pipeline ─────────────────────────────────────
     st.markdown(
@@ -1167,7 +1222,7 @@ def render_m2() -> None:
             unsafe_allow_html=True,
         )
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
 
     # Hash < Target comparison
     st.markdown(
@@ -1245,7 +1300,7 @@ def render_m3() -> None:
             on_change=_clear_adj_cache,
         )
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
 
     try:
         blocks = load_adjustment_blocks(n_periods)
@@ -1301,7 +1356,7 @@ def render_m3() -> None:
     next_str = f"{float(next_diff):.3e}" if next_diff is not None and not pd.isna(next_diff) else "N/A"
     c4.metric("Next Predicted Diff.", next_str)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
 
     # ── Row 2: Difficulty line chart ──────────────────────────────────────────
     st.markdown(
@@ -1339,7 +1394,7 @@ def render_m3() -> None:
         st.plotly_chart(fig, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
 
     # ── Row 3: Ratio chart + Summary table ────────────────────────────────────
     col_ratio, col_table = st.columns(2, gap="medium")
@@ -1443,6 +1498,456 @@ def render_m3() -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# M4 — AI COMPONENT: ANOMALY DETECTOR
+# ─────────────────────────────────────────────────────────────────────────────
+def render_m4() -> None:
+    module_header("M4 — AI COMPONENT: ANOMALY DETECTOR")
+
+    # Sidebar controls
+    col_ctrl, _ = st.columns([2, 5])
+    with col_ctrl:
+        n_blocks = st.slider(
+            "Blocks to analyze",
+            min_value=100, max_value=500, value=300, step=50,
+            key="m4_n_blocks",
+        )
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    # -- Data loading ---------------------------------------------------------
+    with st.spinner("Fetching block data from Blockstream..."):
+        try:
+            raw_blocks = load_m4_blocks(n_blocks)
+        except Exception as e:
+            render_error(f"Could not fetch block data: {e}")
+            return
+
+    if not raw_blocks:
+        render_error("No block data returned from API.")
+        return
+
+    try:
+        df    = build_inter_arrival_df(raw_blocks)
+        times = df["inter_arrival"].values.astype(float)
+        if len(times) < 20:
+            render_error("Not enough inter-arrival samples for analysis.")
+            return
+
+        exp_fit   = fit_exponential(times)
+        stat_mask = detect_statistical(times, exp_fit["lambda_hat"])
+        if_mask, if_scores = detect_isolation_forest(df)
+        synth_eval = evaluate_synthetic_anomalies(df, anomaly_fraction=0.05)
+    except Exception as e:
+        render_error(f"Model error: {e}")
+        return
+
+    df = df.copy()
+    df["stat_anomaly"] = stat_mask
+    df["if_anomaly"]   = if_mask
+    df["if_score"]     = if_scores
+    df["datetime"]     = pd.to_datetime(df["timestamp"], unit="s", utc=True)
+
+    n_samples  = len(df)
+    pct_stat   = 100.0 * stat_mask.sum() / n_samples
+    pct_if     = 100.0 * if_mask.sum()   / n_samples
+    ks_pval    = exp_fit["ks_pvalue"]
+    mean_s     = exp_fit["mean_s"]
+
+    # ── Row 1: Summary metrics ────────────────────────────────────────────────
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Blocks Analyzed",   f"{n_samples:,}")
+    c2.metric("Mean Inter-arrival", f"{mean_s:.0f} s")
+    c3.metric("Target (Poisson)",  "600 s")
+
+    ks_color  = "#1CE87A" if ks_pval >= 0.05 else "#FF4560"
+    ks_border = ks_color
+    ks_label  = f"p = {ks_pval:.4f}"
+    with c4:
+        st.markdown(
+            custom_metric("KS Test p-value", ks_label, ks_color, ks_border),
+            unsafe_allow_html=True,
+        )
+
+    stat_color  = "#F7931A" if pct_stat > 7 else "#1CE87A"
+    stat_border = stat_color
+    with c5:
+        st.markdown(
+            custom_metric(
+                "Stat. Anomalies",
+                f"{pct_stat:.1f}% ({stat_mask.sum()})",
+                stat_color, stat_border,
+            ),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    # ── Row 2: Histogram + QQ-plot ────────────────────────────────────────────
+    col_hist, col_qq = st.columns([3, 2], gap="medium")
+
+    with col_hist:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Inter-Arrival Time Distribution — Fitted Exponential Baseline</div>',
+            unsafe_allow_html=True,
+        )
+        lam_hat = exp_fit["lambda_hat"]
+        x_max   = max(float(np.percentile(times, 99)) * 1.2, 1500.0)
+        x_curve = np.linspace(0, x_max, 600)
+        y_curve = lam_hat * np.exp(-lam_hat * x_curve)
+
+        normal_times  = times[~stat_mask]
+        anomaly_times = times[stat_mask]
+
+        fig = go.Figure()
+        fig.add_trace(go.Histogram(
+            x=normal_times,
+            histnorm="probability density",
+            nbinsx=30,
+            name="Normal blocks",
+            marker_color="rgba(0,194,255,0.65)",
+            marker_line=dict(color="rgba(0,194,255,0.9)", width=0.5),
+            hovertemplate="Interval: %{x:.0f}s<br>Density: %{y:.6f}<extra></extra>",
+        ))
+        fig.add_trace(go.Histogram(
+            x=anomaly_times,
+            histnorm="probability density",
+            nbinsx=30,
+            name="Stat. anomalies",
+            marker_color="rgba(255,69,96,0.75)",
+            marker_line=dict(color="rgba(255,69,96,0.9)", width=0.5),
+            hovertemplate="Interval: %{x:.0f}s (anomaly)<br>Density: %{y:.6f}<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=x_curve, y=y_curve,
+            mode="lines",
+            name="Fitted Exp(λ̂)",
+            line=dict(color="#F7931A", width=2.5),
+            hovertemplate="t=%{x:.0f}s<br>PDF=%{y:.7f}<extra></extra>",
+        ))
+
+        low_bound  = stats.expon.ppf(0.025, scale=1/lam_hat)
+        high_bound = stats.expon.ppf(0.975, scale=1/lam_hat)
+        fig.add_vline(x=low_bound,  line_dash="dash", line_color="#FF4560",
+                      annotation_text="2.5%",  annotation_font_color="#FF4560",
+                      annotation_font_size=10)
+        fig.add_vline(x=high_bound, line_dash="dash", line_color="#FF4560",
+                      annotation_text="97.5%", annotation_font_color="#FF4560",
+                      annotation_font_size=10)
+        fig.add_annotation(
+            text=f"Observed mean: {mean_s:.0f}s",
+            xref="paper", yref="paper", x=0.97, y=0.95, showarrow=False,
+            bgcolor="#141C35", bordercolor="#1CE87A", borderwidth=1, borderpad=6,
+            font=dict(family="Rajdhani", size=12, color="#1CE87A"), align="right",
+        )
+        fig.add_annotation(
+            text=f"KS p-value: {ks_pval:.4f} {'(fit OK)' if ks_pval >= 0.05 else '(poor fit)'}",
+            xref="paper", yref="paper", x=0.97, y=0.84, showarrow=False,
+            bgcolor="#141C35", bordercolor="#6B7DA0", borderwidth=1, borderpad=6,
+            font=dict(family="Rajdhani", size=11, color="#6B7DA0"), align="right",
+        )
+        apply_chart_style(fig)
+        fig.update_layout(
+            xaxis_title="Seconds between consecutive blocks",
+            yaxis_title="Probability density",
+            barmode="overlay",
+            showlegend=True,
+            legend=dict(
+                x=0.97, y=0.72, xanchor="right",
+                bgcolor="rgba(15,22,41,0.85)",
+                bordercolor="#1E2D5A", borderwidth=1,
+            ),
+            height=360,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            'margin-top:0;line-height:1.55;">'
+            'Red bars = blocks flagged as anomalous (outside 2.5–97.5% quantiles). '
+            'Orange dashed lines = detection thresholds. '
+            'Bitcoin mining is modelled as a Poisson process: inter-arrival times '
+            'should be close to an exponential distribution with target mean 600s. '
+            'Here λ is fitted from recent data. Deviations can indicate mining-pool bursts, '
+            'network latency, or selfish mining (Eyal &amp; Sirer 2014).</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_qq:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'QQ-Plot — Empirical vs Exp(λ̂)</div>',
+            unsafe_allow_html=True,
+        )
+        sorted_times = np.sort(times)
+        n = len(sorted_times)
+        probs = (np.arange(1, n + 1) - 0.5) / n
+        theoretical_q = stats.expon.ppf(probs, scale=1.0 / lam_hat)
+        qq_max = float(max(sorted_times.max(), theoretical_q.max())) * 1.05
+
+        fig_qq = go.Figure()
+        fig_qq.add_trace(go.Scatter(
+            x=theoretical_q, y=sorted_times,
+            mode="markers",
+            name="Data quantiles",
+            marker=dict(color="#00C2FF", size=4, opacity=0.7),
+            hovertemplate="Theoretical: %{x:.0f}s<br>Observed: %{y:.0f}s<extra></extra>",
+        ))
+        fig_qq.add_trace(go.Scatter(
+            x=[0, qq_max], y=[0, qq_max],
+            mode="lines",
+            name="Perfect fit (y=x)",
+            line=dict(color="#F7931A", width=1.5, dash="dash"),
+        ))
+        apply_chart_style(fig_qq)
+        fig_qq.update_layout(
+            xaxis_title="Theoretical quantiles (s)",
+            yaxis_title="Observed quantiles (s)",
+            showlegend=True,
+            legend=dict(
+                x=0.05, y=0.95, xanchor="left",
+                bgcolor="rgba(15,22,41,0.85)",
+                bordercolor="#1E2D5A", borderwidth=1,
+            ),
+            height=360,
+        )
+        st.plotly_chart(fig_qq, use_container_width=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            'margin-top:0;line-height:1.55;">'
+            'Points on the orange line = perfect exponential fit. '
+            'Deviations in the upper tail indicate heavy-tailed behaviour '
+            '(very long waits) or occasional network partitions.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    # ── Row 3: IsolationForest timeline + method comparison ───────────────────
+    col_if, col_compare = st.columns([3, 2], gap="medium")
+
+    with col_if:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'IsolationForest Anomaly Score Timeline</div>',
+            unsafe_allow_html=True,
+        )
+        normal_df  = df[~df["if_anomaly"]]
+        anomaly_df = df[df["if_anomaly"]]
+
+        fig_if = go.Figure()
+        fig_if.add_trace(go.Scatter(
+            x=normal_df["datetime"], y=normal_df["inter_arrival"],
+            mode="markers",
+            name="Normal",
+            marker=dict(color="rgba(0,194,255,0.55)", size=4),
+            hovertemplate="%{x|%Y-%m-%d %H:%M}<br>%{y:.0f}s<extra>Normal</extra>",
+        ))
+        fig_if.add_trace(go.Scatter(
+            x=anomaly_df["datetime"], y=anomaly_df["inter_arrival"],
+            mode="markers",
+            name="IF anomaly",
+            marker=dict(color="#FF4560", size=7, symbol="x"),
+            hovertemplate="%{x|%Y-%m-%d %H:%M}<br>%{y:.0f}s<extra>Anomaly</extra>",
+        ))
+        fig_if.add_hline(
+            y=600, line_dash="dash", line_color="#F7931A",
+            annotation_text="600s target",
+            annotation_font=dict(family="Rajdhani", color="#F7931A", size=11),
+            annotation_position="top right",
+        )
+        apply_chart_style(fig_if)
+        fig_if.update_layout(
+            xaxis_title="Date (UTC)",
+            yaxis_title="Inter-arrival time (s)",
+            showlegend=True,
+            legend=dict(
+                x=0.02, y=0.96, xanchor="left",
+                bgcolor="rgba(15,22,41,0.85)",
+                bordercolor="#1E2D5A", borderwidth=1,
+            ),
+            height=320,
+        )
+        st.plotly_chart(fig_if, use_container_width=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            'margin-top:0;line-height:1.55;">'
+            'IsolationForest uses three features: log(inter_arrival), '
+            'hour_of_day (UTC), and position within the 2016-block difficulty epoch. '
+            'contamination=0.05 targets ~5% anomaly rate. '
+            'Red &times; marks = blocks the model considers anomalous.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_compare:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Method Comparison</div>',
+            unsafe_allow_html=True,
+        )
+        both_mask    = stat_mask & if_mask
+        only_stat    = stat_mask & ~if_mask
+        only_if      = ~stat_mask & if_mask
+
+        rows = [
+            ("Blocks analyzed",             f"{n_samples:,}",                   "#E8EDF5"),
+            ("Mean inter-arrival",          f"{mean_s:.0f} s",                  "#E8EDF5"),
+            ("Exp fit — KS statistic",      f"{exp_fit['ks_stat']:.4f}",        "#6B7DA0"),
+            ("Exp fit — KS p-value",        f"{ks_pval:.4f}",
+             "#1CE87A" if ks_pval >= 0.05 else "#FF4560"),
+            ("Statistical anomalies",
+             f"{stat_mask.sum()} ({pct_stat:.1f}%)", "#F7931A"),
+            ("IsolationForest anomalies",
+             f"{if_mask.sum()} ({pct_if:.1f}%)",     "#FF4560"),
+            ("Flagged by both methods",     f"{both_mask.sum()}",               "#00C2FF"),
+            ("Only statistical",            f"{only_stat.sum()}",               "#6B7DA0"),
+            ("Only IsolationForest",        f"{only_if.sum()}",                 "#6B7DA0"),
+        ]
+        if synth_eval:
+            rows.extend([
+                ("Synthetic labels injected", f"{synth_eval['n_injected']}",     "#E8EDF5"),
+                ("Statistical F1",            f"{synth_eval['statistical']['f1']:.3f}", "#F7931A"),
+                ("IsolationForest F1",        f"{synth_eval['isolation_forest']['f1']:.3f}", "#FF4560"),
+            ])
+        table_rows = "".join(
+            f'<tr onmouseover="this.style.background=\'rgba(0,194,255,0.04)\'"'
+            f' onmouseout="this.style.background=\'transparent\'">'
+            f'<td style="padding:7px 10px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-size:0.82rem;color:#6B7DA0;">{lbl}</td>'
+            f'<td style="padding:7px 10px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-size:0.9rem;font-weight:700;'
+            f'color:{col};text-align:right;">{val}</td>'
+            f'</tr>'
+            for lbl, val, col in rows
+        )
+        st.markdown(
+            f'<table style="width:100%;border-collapse:collapse;">'
+            f'<tbody>{table_rows}</tbody></table>',
+            unsafe_allow_html=True,
+        )
+        st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.77rem;color:#6B7DA0;'
+            'line-height:1.6;">'
+            '<strong style="color:#E8EDF5;">Statistical</strong> — '
+            'interpretable, grounded in the Poisson mining model. '
+            'Flags extreme univariate outliers.<br>'
+            '<strong style="color:#E8EDF5;">IsolationForest</strong> — '
+            'multivariate, captures joint anomalies across time, '
+            'epoch position, and hour of day. '
+            'Better at detecting mining-pool coordination patterns.<br>'
+            '<strong style="color:#E8EDF5;">Evaluation</strong> — '
+            'because real blocks have no anomaly labels, labelled anomalies are '
+            'synthetically injected into real inter-arrival data and measured '
+            'with precision, recall, and F1.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    if synth_eval:
+        st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Synthetic Anomaly Evaluation — Precision / Recall / F1</div>',
+            unsafe_allow_html=True,
+        )
+        sc1, sc2, sc3, sc4, sc5, sc6, sc7 = st.columns(7)
+        stat_eval = synth_eval["statistical"]
+        if_eval = synth_eval["isolation_forest"]
+        sc1.metric("Injected Labels", f"{synth_eval['n_injected']}")
+        sc2.metric("Stat Precision", f"{stat_eval['precision']:.3f}")
+        sc3.metric("Stat Recall", f"{stat_eval['recall']:.3f}")
+        sc4.metric("Stat F1", f"{stat_eval['f1']:.3f}")
+        sc5.metric("IF Precision", f"{if_eval['precision']:.3f}")
+        sc6.metric("IF Recall", f"{if_eval['recall']:.3f}")
+        sc7.metric("IF F1", f"{if_eval['f1']:.3f}")
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            'margin-top:10px;line-height:1.55;">'
+            'Evaluation uses the same recent Bitcoin block sample, then injects '
+            'controlled fast-block and slow-block anomalies into 5% of intervals. '
+            'This gives known labels without pretending that real-world anomaly '
+            'labels are available.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    # ── Row 4: Top anomalies table ────────────────────────────────────────────
+    st.markdown(
+        '<div class="card"><div class="card-title">'
+        'Top Anomalous Blocks (by inter-arrival time)</div>',
+        unsafe_allow_html=True,
+    )
+    top_df = (
+        df[df["stat_anomaly"] | df["if_anomaly"]]
+        .assign(abs_dev=lambda d: (d["inter_arrival"] - 600).abs())
+        .sort_values("abs_dev", ascending=False)
+        .head(15)
+    )
+
+    if top_df.empty:
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.85rem;color:#6B7DA0;">'
+            'No anomalies detected in this dataset.</p>',
+            unsafe_allow_html=True,
+        )
+    else:
+        th_s = (
+            "padding:7px 12px;text-align:left;font-family:Rajdhani,sans-serif;"
+            "font-size:0.72rem;color:#6B7DA0;text-transform:uppercase;"
+            "letter-spacing:0.08em;border-bottom:2px solid #1E2D5A;"
+        )
+        thead = (
+            "<thead><tr>"
+            + "".join(
+                f'<th style="{th_s}">{h}</th>'
+                for h in ["Height", "Date (UTC)", "Inter-arrival (s)",
+                           "Dev. from 600s", "Stat.", "IF"]
+            )
+            + "</tr></thead>"
+        )
+        tbody_rows = []
+        for _, row in top_df.iterrows():
+            dt_str  = pd.Timestamp(row["datetime"]).strftime("%Y-%m-%d %H:%M")
+            iat     = int(row["inter_arrival"])
+            dev     = iat - 600
+            dev_col = "#FF4560" if dev > 0 else "#1CE87A"
+            stat_v  = '<span style="color:#FF4560;">YES</span>' if row["stat_anomaly"] else '<span style="color:#6B7DA0;">—</span>'
+            if_v    = '<span style="color:#FF4560;">YES</span>' if row["if_anomaly"]   else '<span style="color:#6B7DA0;">—</span>'
+            tbody_rows.append(
+                '<tr onmouseover="this.style.background=\'rgba(0,194,255,0.04)\'"'
+                ' onmouseout="this.style.background=\'transparent\'">'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:Rajdhani,sans-serif;font-weight:600;color:#E8EDF5;">'
+                f'{int(row["height"]):,}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:Rajdhani,sans-serif;color:#6B7DA0;">{dt_str}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:\'Share Tech Mono\',monospace;color:#00C2FF;">{iat:,}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:Rajdhani,sans-serif;color:{dev_col};font-weight:700;">'
+                f'{dev:+,}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'text-align:center;">{stat_v}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'text-align:center;">{if_v}</td>'
+                "</tr>"
+            )
+        st.markdown(
+            f'<div style="overflow-x:auto;">'
+            f'<table style="width:100%;border-collapse:collapse;">'
+            f'{thead}<tbody>{"".join(tbody_rows)}</tbody>'
+            f'</table></div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 # ── Module routing ─────────────────────────────────────────────────────────────
 if module == "M1 — PoW Monitor":
     render_m1()
@@ -1450,3 +1955,5 @@ elif module == "M2 — Block Header Analyzer":
     render_m2()
 elif module == "M3 — Difficulty History":
     render_m3()
+elif module == "M4 — Anomaly Detector":
+    render_m4()
