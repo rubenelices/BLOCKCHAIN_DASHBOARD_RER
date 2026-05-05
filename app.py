@@ -586,6 +586,7 @@ from modules.m6_security_score import (
     estimate_attack_hashrate,
     estimate_energy_cost_per_hour,
 )
+from modules.m7_difficulty_predictor import train_and_evaluate
 from api.blockchain_client import get_blocks_paginated
 
 # ── Cached API wrappers ───────────────────────────────────────────────────────
@@ -798,20 +799,30 @@ st.markdown(f"""
 </script>
 """, unsafe_allow_html=True)
 
-# ── Navigation pills (horizontal radio) ───────────────────────────────────────
-module = st.radio(
-    "Navigation",
-    options=[
-        "M1 — PoW Monitor",
-        "M2 — Block Header Analyzer",
-        "M3 — Difficulty History",
-        "M4 — Anomaly Detector",
-        "M5 — Merkle Proof",
-        "M6 — Security Score",
-    ],
-    horizontal=True,
-    label_visibility="collapsed",
-)
+# ── Navigation pills ──────────────────────────────────────────────────────────
+nav_options = [
+    "M1 — PoW Monitor",
+    "M2 — Block Header Analyzer",
+    "M3 — Difficulty History",
+    "M4 — Anomaly Detector",
+    "M5 — Merkle Proof",
+    "M6 — Security Score",
+    "M7 — Difficulty Predictor",
+]
+if hasattr(st, "segmented_control"):
+    module = st.segmented_control(
+        "Navigation",
+        options=nav_options,
+        default=nav_options[0],
+        label_visibility="collapsed",
+    )
+else:
+    module = st.radio(
+        "Navigation",
+        options=nav_options,
+        horizontal=True,
+        label_visibility="collapsed",
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2277,7 +2288,7 @@ def render_m6() -> None:
     col_ctrl1, col_ctrl2, col_ctrl3, col_ctrl4 = st.columns(4)
     with col_ctrl1:
         attacker_percent = st.slider(
-            "Attacker hash power",
+            "Attacker share q",
             min_value=5,
             max_value=49,
             value=30,
@@ -2347,7 +2358,7 @@ def render_m6() -> None:
     with col_cost:
         st.markdown(
             '<div class="card"><div class="card-title">'
-            'Energy-Only 51% Attack Cost Lower Bound</div>',
+            'Energy-Only Attack Cost Lower Bound</div>',
             unsafe_allow_html=True,
         )
         cost_df = build_cost_curve(
@@ -2388,7 +2399,7 @@ def render_m6() -> None:
         )
         apply_chart_style(fig_cost)
         fig_cost.update_layout(
-            xaxis_title="Attacker share of current network hash rate (%)",
+            xaxis_title="Attacker share q of total post-attack hash power (%)",
             yaxis_title="USD per hour",
             showlegend=False,
             height=350,
@@ -2397,6 +2408,8 @@ def render_m6() -> None:
         st.markdown(
             '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
             'margin-top:0;line-height:1.55;">'
+            'The x-axis is Nakamoto q: attacker fraction of total post-attack hash power. '
+            'Required attacker hash rate is q/(1-q) times the current honest network. '
             'This is an energy-only lower bound. It excludes ASIC purchase, hardware '
             'availability, cooling, facilities, pool coordination, and market impact.</p>',
             unsafe_allow_html=True,
@@ -2531,12 +2544,204 @@ def render_m6() -> None:
             'The network hash rate is estimated from current difficulty as '
             '<code>difficulty · 2^32 / 600</code>. Double-spend probability uses '
             'Nakamoto 2008 section 11 with a Poisson approximation. Here '
-            '<code>q</code> is attacker hash power, <code>p=1-q</code>, and '
-            '<code>z</code> is confirmation depth. If <code>q ≥ 0.5</code>, the '
-            'attacker eventually catches up with probability 1.</p>',
+            '<code>q = A/(A+H)</code> is attacker fraction of total post-attack hash '
+            'power, <code>p=1-q</code>, and <code>z</code> is confirmation depth. '
+            'To reach q against current honest hash rate H, the attacker needs '
+            '<code>A = q/(1-q) · H</code>. If <code>q ≥ 0.5</code>, the attacker '
+            'eventually catches up with probability 1.</p>',
             unsafe_allow_html=True,
         )
         st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M7 — DIFFICULTY PREDICTOR
+# ─────────────────────────────────────────────────────────────────────────────
+def render_m7() -> None:
+    module_header("M7 — DIFFICULTY PREDICTOR")
+
+    col_ctrl1, col_ctrl2, _ = st.columns([2, 2, 3])
+    with col_ctrl1:
+        n_periods = st.slider(
+            "Historical adjustment periods",
+            min_value=12,
+            max_value=40,
+            value=24,
+            step=2,
+            key="m7_n_periods",
+            on_change=_clear_adj_cache,
+        )
+    with col_ctrl2:
+        test_fraction_pct = st.slider(
+            "Holdout test split",
+            min_value=20,
+            max_value=40,
+            value=30,
+            step=5,
+            key="m7_test_fraction",
+        )
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    try:
+        blocks = load_adjustment_blocks(n_periods)
+        df = build_adjustment_dataframe(blocks)
+        result = train_and_evaluate(df, test_fraction=test_fraction_pct / 100.0)
+    except Exception as e:
+        render_error(f"Difficulty predictor error: {e}")
+        return
+
+    evaluations = result["evaluations"]
+    best_name = result["best_model_name"]
+    best_eval = evaluations[best_name]
+    dataset = result["dataset"]
+    train_df = result["train_df"]
+    test_df = result["test_df"]
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Usable Samples", f"{len(dataset):,}")
+    c2.metric("Train / Test", f"{len(train_df)} / {len(test_df)}")
+    c3.metric("Best Model", best_name)
+    c4.metric("Holdout MAE", f"{best_eval['mae']:.3f} pp")
+    forecast_color = "#1CE87A" if result["latest_pct_change"] >= 0 else "#FF4560"
+    with c5:
+        st.markdown(
+            custom_metric(
+                "Latest Retarget Pred.",
+                f"{result['latest_pct_change']:+.2f}%",
+                forecast_color,
+                forecast_color,
+            ),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    col_chart, col_metrics = st.columns([3, 2], gap="medium")
+    with col_chart:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Holdout Prediction — Retarget Change Backtest</div>',
+            unsafe_allow_html=True,
+        )
+        holdout = result["holdout_predictions"].copy()
+        fig_pred = go.Figure()
+        fig_pred.add_trace(go.Scatter(
+            x=holdout["date"],
+            y=holdout["target_pct_change"],
+            mode="lines+markers",
+            name="Actual retarget change",
+            line=dict(color="#1CE87A", width=2.5),
+            marker=dict(size=8),
+            hovertemplate="%{x|%Y-%m-%d}<br>Actual: %{y:+.3f}%<extra></extra>",
+        ))
+        model_colors = {
+            "Linear Regression": "#00C2FF",
+            "Random Forest": "#F7931A",
+        }
+        for model_name in evaluations:
+            col_name = f"{model_name} prediction"
+            fig_pred.add_trace(go.Scatter(
+                x=holdout["date"],
+                y=holdout[col_name],
+                mode="lines+markers",
+                name=model_name,
+                line=dict(
+                    color=model_colors.get(model_name, "#E8EDF5"),
+                    width=2,
+                    dash="dash",
+                ),
+                marker=dict(size=6),
+                hovertemplate=f"{model_name}<br>%{{x|%Y-%m-%d}}<br>Pred: %{{y:+.3f}}%<extra></extra>",
+            ))
+        fig_pred.add_hline(
+            y=0,
+            line_dash="dot",
+            line_color="#6B7DA0",
+        )
+        apply_chart_style(fig_pred)
+        fig_pred.update_layout(
+            xaxis_title="Adjustment date",
+            yaxis_title="Difficulty retarget change (%)",
+            height=360,
+            legend=dict(
+                x=0.02, y=0.98, xanchor="left",
+                bgcolor="rgba(15,22,41,0.85)",
+                bordercolor="#1E2D5A", borderwidth=1,
+            ),
+        )
+        st.plotly_chart(fig_pred, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_metrics:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Regression Metrics</div>',
+            unsafe_allow_html=True,
+        )
+        rows = []
+        for model_name, evaluation in evaluations.items():
+            is_best = model_name == best_name
+            rows.extend([
+                (f"{model_name} MAE", f"{evaluation['mae']:.3f} pp", "#1CE87A" if is_best else "#E8EDF5"),
+                (f"{model_name} RMSE", f"{evaluation['rmse']:.3f} pp", "#00C2FF"),
+                (f"{model_name} R²", "N/A" if pd.isna(evaluation["r2"]) else f"{evaluation['r2']:.3f}", "#F7931A"),
+            ])
+        rows.extend([
+            ("Previous Difficulty", f"{result['previous_difficulty']:.3e}", "#E8EDF5"),
+            ("Actual Difficulty", f"{result['actual_difficulty']:.3e}", "#E8EDF5"),
+            ("Predicted Adjusted Difficulty", f"{result['predicted_adjusted_difficulty']:.3e}", forecast_color),
+        ])
+        table_rows = "".join(
+            f'<tr onmouseover="this.style.background=\'rgba(0,194,255,0.04)\'"'
+            f' onmouseout="this.style.background=\'transparent\'">'
+            f'<td style="padding:7px 10px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-size:0.82rem;color:#6B7DA0;">{label}</td>'
+            f'<td style="padding:7px 10px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-size:0.9rem;font-weight:700;'
+            f'color:{color};text-align:right;">{value}</td>'
+            f'</tr>'
+            for label, value, color in rows
+        )
+        st.markdown(
+            f'<table style="width:100%;border-collapse:collapse;">'
+            f'<tbody>{table_rows}</tbody></table>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.77rem;color:#6B7DA0;'
+            'line-height:1.6;margin-top:12px;">'
+            'The split is chronological: older adjustment periods train the model, '
+            'newer periods form the holdout test set. This avoids training on future data.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="card"><div class="card-title">'
+        'Feature Set And Model Rationale</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<p style="font-family:Inter,sans-serif;font-size:0.82rem;color:#6B7DA0;'
+        'line-height:1.65;margin:0;">'
+        'M7 is a second AI approach, different from M4. M4 is unsupervised anomaly '
+        'detection on block inter-arrival times; M7 is supervised regression on '
+        'historical difficulty adjustment periods. Features include the previous '
+        'difficulty, actual/target period ratio, previous percentage changes, and '
+        '3-period rolling averages. The target is the retarget percentage change '
+        'applied at each completed adjustment event.<br><br>'
+        '<strong style="color:#E8EDF5;">Why include Linear Regression?</strong> '
+        'It is a simple baseline, not the expected best model. If Random Forest '
+        'does not beat the linear baseline, then the extra model complexity is not '
+        'adding value. If Random Forest clearly improves MAE/RMSE/R², that is '
+        'evidence that the difficulty retarget behaviour is better captured by a '
+        'non-linear model.</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ── Module routing ─────────────────────────────────────────────────────────────
@@ -2552,3 +2757,5 @@ elif module == "M5 — Merkle Proof":
     render_m5()
 elif module == "M6 — Security Score":
     render_m6()
+elif module == "M7 — Difficulty Predictor":
+    render_m7()

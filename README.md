@@ -24,6 +24,7 @@ Use one of these values: `Not started`, `In progress`, `Done`
 | M4 | AI Component | Done |
 | M5 | Merkle Proof Verifier | Done |
 | M6 | Security Score | Done |
+| M7 | Second AI Approach | Done |
 
 ## Current Progress
 
@@ -36,12 +37,13 @@ Use one of these values: `Not started`, `In progress`, `Done`
 - M4 evaluation: KS goodness-of-fit test plus synthetic anomaly precision, recall, and F1-score.
 - M5: Merkle proof verifier that rebuilds a transaction path to the block header Merkle root.
 - M6: security score with energy-only 51% attack cost and Nakamoto double-spend probability curves.
+- M7: supervised difficulty adjustment predictor with chronological holdout metrics.
 - API client expanded: get_block_header_hex, get_block_txids, get_block_by_height.
 
 ## Next Step
 
-- Implement optional module M7.
 - Add final report in report/report.pdf before the deadline.
+- Run a clean final test of installation and dashboard startup.
 
 ## Main Problem or Blocker
 
@@ -70,7 +72,8 @@ template-blockchain-dashboard/
     |-- m3_difficulty_history.py
     |-- m4_ai_component.py
     |-- m5_merkle_proof.py
-    `-- m6_security_score.py
+    |-- m6_security_score.py
+    `-- m7_difficulty_predictor.py
 ```
 
 <!-- student-repo-auditor:teacher-feedback:start -->

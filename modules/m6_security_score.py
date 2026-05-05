@@ -5,11 +5,18 @@ import math
 import pandas as pd
 
 
-def estimate_attack_hashrate(network_hashrate_hs: float, attacker_share: float) -> float:
-    """Return attacker hash rate in H/s for a fraction of total network hash rate."""
-    if attacker_share < 0:
-        raise ValueError("attacker_share must be non-negative.")
-    return network_hashrate_hs * attacker_share
+def estimate_attack_hashrate(honest_hashrate_hs: float, attacker_fraction: float) -> float:
+    """Return attacker H/s needed to reach q of total post-attack hash power.
+
+    Nakamoto's q is the attacker's fraction of total hash power after the
+    attacker joins: q = A / (A + H). Solving for attacker hash rate A gives
+    A = q / (1 - q) * H, where H is the current honest network hash rate.
+    """
+    if honest_hashrate_hs < 0:
+        raise ValueError("honest_hashrate_hs must be non-negative.")
+    if attacker_fraction < 0 or attacker_fraction >= 1:
+        raise ValueError("attacker_fraction must be in [0, 1).")
+    return honest_hashrate_hs * attacker_fraction / (1.0 - attacker_fraction)
 
 
 def estimate_energy_cost_per_hour(
@@ -95,7 +102,7 @@ def build_cost_curve(
     max_share: float = 0.51,
     points: int = 30,
 ) -> pd.DataFrame:
-    """Build cost/hour estimates over attacker hash-rate shares."""
+    """Build cost/hour estimates over Nakamoto attacker fractions q."""
     if points < 2:
         raise ValueError("points must be at least 2.")
 
