@@ -11,6 +11,10 @@ import streamlit as st
 from scipy import stats
 from streamlit_autorefresh import st_autorefresh
 
+from config.crypto_config import CRYPTO_CONFIGS, DEFAULT_CRYPTO_ID, CryptoConfig, get_crypto_config
+from modules.module_registry import ModuleSpec, module_by_label, supported_module_specs
+from ui.theme import chart_colors, crypto_theme_css
+
 # ── Page config — MUST be the very first Streamlit call ──────────────────────
 st.set_page_config(
     page_title="CryptoChain Analyzer",
@@ -18,6 +22,10 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed",
 )
+
+if "active_crypto_id" not in st.session_state:
+    st.session_state["active_crypto_id"] = DEFAULT_CRYPTO_ID
+active_crypto = get_crypto_config(st.session_state["active_crypto_id"])
 
 # ── Global CSS injection — immediately after set_page_config ─────────────────
 st.markdown("""
@@ -336,67 +344,71 @@ hr { border-color: var(--border) !important; opacity: 0.5; }
     flex-shrink: 0;
 }
 
-/* ── Navigation radio — centred floating pills ── */
-[data-testid="stRadio"] {
-    background: transparent !important;
-    border: none !important;
-    padding: 16px 0 10px !important;
-    margin: 0 0 20px 0 !important;
+/* ── Navigation buttons — centred two-row module grid ── */
+.nav-row {
+    max-width: 1240px;
+    margin: 0 auto;
 }
-div[role="radiogroup"] {
-    display: flex !important;
-    flex-direction: row !important;
-    flex-wrap: nowrap !important;
-    gap: 12px !important;
-    justify-content: center !important;
-    align-items: stretch !important;
+.nav-row-top {
+    margin-top: 8px;
+}
+.nav-row-bottom {
+    margin-top: 14px;
+    margin-bottom: 24px;
+}
+div[data-testid="stButton"] > button {
+    position: relative !important;
+    overflow: hidden !important;
     width: 100% !important;
-}
-div[role="radiogroup"] label {
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    background: #0C1424 !important;
-    border: 1px solid #1E2D5A !important;
-    border-radius: 10px !important;
-    padding: 0 38px !important;
-    height: 50px !important;
+    min-height: 58px !important;
+    background:
+        linear-gradient(180deg, rgba(20,28,53,0.96) 0%, rgba(8,14,28,0.98) 100%) !important;
+    border: 1px solid rgba(0,194,255,0.18) !important;
+    border-radius: 12px !important;
+    padding: 0 22px !important;
     box-sizing: border-box !important;
     white-space: nowrap !important;
-    cursor: pointer !important;
-    transition: all 0.2s ease !important;
+    transition: border-color 0.22s ease, box-shadow 0.22s ease, transform 0.16s ease, color 0.2s ease !important;
     font-family: 'Rajdhani', sans-serif !important;
-    font-size: 0.87rem !important;
+    font-size: 0.95rem !important;
     font-weight: 700 !important;
-    color: #4A5E88 !important;
-    letter-spacing: 0.1em !important;
+    color: #6F86B5 !important;
+    letter-spacing: 0.105em !important;
     text-transform: uppercase !important;
-    min-width: 190px !important;
-    flex: 0 1 240px !important;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.03), 0 8px 24px rgba(0,0,0,0.22) !important;
 }
-div[role="radiogroup"] label:hover {
-    background: rgba(0,194,255,0.08) !important;
-    border-color: rgba(0,194,255,0.35) !important;
-    color: #7BBDE8 !important;
-    box-shadow: 0 4px 20px rgba(0,194,255,0.09) !important;
+div[data-testid="stButton"] > button::before {
+    content: "" !important;
+    position: absolute !important;
+    inset: 0 !important;
+    background:
+        radial-gradient(circle at 18% 0%, rgba(0,194,255,0.13), transparent 38%),
+        linear-gradient(90deg, rgba(247,147,26,0.00), rgba(247,147,26,0.05), rgba(0,194,255,0.00)) !important;
+    opacity: 0 !important;
+    transition: opacity 0.22s ease !important;
+    pointer-events: none !important;
+}
+div[data-testid="stButton"] > button:hover {
+    border-color: rgba(0,194,255,0.48) !important;
+    color: #A9DFFF !important;
+    box-shadow: 0 10px 30px rgba(0,194,255,0.11), inset 0 1px 0 rgba(255,255,255,0.05) !important;
     transform: translateY(-2px) !important;
 }
-div[role="radiogroup"] label:has(input[type=radio]:checked) {
-    background: rgba(0,194,255,0.10) !important;
-    border-color: #00C2FF !important;
-    color: #00C2FF !important;
-    box-shadow: 0 0 22px rgba(0,194,255,0.16) !important;
+div[data-testid="stButton"] > button:hover::before {
+    opacity: 1 !important;
 }
-/* Hide the radio circle dot */
-div[role="radiogroup"] label > div:first-child { display: none !important; }
-div[role="radiogroup"] label > div:last-child  { margin-left: 0 !important; }
-div[role="radiogroup"] label p {
-    margin: 0 !important;
-    color: inherit !important;
-    font-family: inherit !important;
-    font-size: inherit !important;
-    font-weight: inherit !important;
-    letter-spacing: inherit !important;
+div[data-testid="stButton"] > button[kind="primary"] {
+    background:
+        linear-gradient(180deg, rgba(0,194,255,0.15) 0%, rgba(9,20,39,0.98) 100%) !important;
+    border-color: #00C2FF !important;
+    color: #E8F7FF !important;
+    box-shadow:
+        0 0 0 1px rgba(0,194,255,0.18),
+        0 0 28px rgba(0,194,255,0.18),
+        inset 0 -2px 0 #F7931A !important;
+}
+div[data-testid="stButton"] > button[kind="primary"]::before {
+    opacity: 1 !important;
 }
 
 /* ── Cards ── */
@@ -553,6 +565,7 @@ div[role="radiogroup"] label p {
 .bit-bar { line-height: 0; display: block; margin: 3px 0; }
 </style>
 """, unsafe_allow_html=True)
+st.markdown(crypto_theme_css(active_crypto), unsafe_allow_html=True)
 
 # ── Imports from project modules ──────────────────────────────────────────────
 from api.blockchain_client import (
@@ -562,6 +575,10 @@ from api.blockchain_client import (
     get_recent_blocks,
     get_tip_hash,
 )
+from api.ethereum_client import get_block_by_number as get_eth_block_by_number
+from api.ethereum_client import get_recent_blocks as get_eth_recent_blocks
+from api.litecoin_client import get_latest_block as get_ltc_latest_block
+from api.litecoin_client import get_recent_blocks as get_ltc_recent_blocks
 from modules.m1_pow_monitor import (
     bits_to_target,
     count_leading_zero_bits,
@@ -625,16 +642,27 @@ def load_m4_blocks(n_blocks: int) -> list[dict]:
     return get_blocks_paginated(n_blocks)
 
 
+@st.cache_data(ttl=30)
+def load_eth_recent_blocks(count: int) -> list[dict]:
+    return get_eth_recent_blocks(count)
+
+
+@st.cache_data(ttl=30)
+def load_ltc_recent_blocks(count: int) -> list[dict]:
+    return get_ltc_recent_blocks(count)
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def apply_chart_style(fig: go.Figure) -> go.Figure:
+    colors = chart_colors(active_crypto)
     fig.update_layout(
         template="plotly_dark",
-        paper_bgcolor="#0A0E1A",
-        plot_bgcolor="#0F1629",
-        font=dict(family="Rajdhani", color="#E8EDF5"),
-        xaxis=dict(gridcolor="#1E2D5A", showgrid=True),
-        yaxis=dict(gridcolor="#1E2D5A", showgrid=True),
+        paper_bgcolor=colors["paper"],
+        plot_bgcolor=colors["plot"],
+        font=dict(family="Rajdhani", color=colors["text"]),
+        xaxis=dict(gridcolor=colors["grid"], showgrid=True),
+        yaxis=dict(gridcolor=colors["grid"], showgrid=True),
         margin=dict(t=30, b=40, l=50, r=20),
     )
     return fig
@@ -701,6 +729,28 @@ def module_header(title: str) -> None:
     st.markdown('<hr class="module-divider">', unsafe_allow_html=True)
 
 
+def render_pending_crypto_module(crypto: CryptoConfig, spec: ModuleSpec) -> None:
+    module_header(spec.title)
+    mode = crypto.module_modes.get(spec.id, "methodological_variant")
+    st.markdown(
+        f'<div class="card">'
+        f'<div class="card-title">{crypto.name} variant pending implementation</div>'
+        f'<p style="font-family:Inter,sans-serif;font-size:0.86rem;color:#6B7DA0;'
+        f'line-height:1.65;margin:0 0 12px 0;">'
+        f'This module is intentionally blocked for {crypto.name} until its data source '
+        f'and methodology are implemented. The dashboard will not display Bitcoin '
+        f'PoW calculations under a {crypto.ticker} label.</p>'
+        f'<p class="field-label">Academic purpose</p>'
+        f'<p class="field-val">{spec.academic_purpose}</p>'
+        f'<p class="field-label">Required variant</p>'
+        f'<p class="field-val">{mode}</p>'
+        f'<p class="field-label">Planned data source</p>'
+        f'<p class="field-val">{crypto.data_source}</p>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
 # ── Session state init ────────────────────────────────────────────────────────
 if "m2_hash" not in st.session_state:
     try:
@@ -728,16 +778,16 @@ st.markdown(f"""
     <div class="ph-glow-c"></div>
     <div class="ph-glow-l"></div>
     <div class="ph-glow-r"></div>
-    <div class="ph-ghost">BLOCKCHAIN</div>
+        <div class="ph-ghost">BLOCKCHAIN</div>
     <div class="ph-glass">
         <div class="ph-headline">
-            <span class="ph-btc-sym">&#x20BF;</span>
+            <span class="ph-btc-sym">{active_crypto.symbol}</span>
             <span class="ph-sep">&mdash;</span>
             <span class="ph-wordmark">CRYPTOCHAIN ANALYZER</span>
         </div>
         <div class="ph-divider"></div>
         <p class="ph-t2">
-            BITCOIN BLOCKCHAIN ANALYTICS
+            {active_crypto.tagline.upper()}
             <span class="ph-t2-sep">&middot;</span>
             RUBEN ELICES RODRIGUEZ
             <span class="ph-t2-sep">&middot;</span>
@@ -799,30 +849,95 @@ st.markdown(f"""
 </script>
 """, unsafe_allow_html=True)
 
-# ── Navigation pills ──────────────────────────────────────────────────────────
-nav_options = [
-    "M1 — PoW Monitor",
-    "M2 — Block Header Analyzer",
-    "M3 — Difficulty History",
-    "M4 — Anomaly Detector",
-    "M5 — Merkle Proof",
-    "M6 — Security Score",
-    "M7 — Difficulty Predictor",
-]
-if hasattr(st, "segmented_control"):
-    module = st.segmented_control(
-        "Navigation",
-        options=nav_options,
-        default=nav_options[0],
-        label_visibility="collapsed",
-    )
-else:
-    module = st.radio(
-        "Navigation",
-        options=nav_options,
-        horizontal=True,
-        label_visibility="collapsed",
-    )
+# ── Cryptocurrency selector + navigation pills ───────────────────────────────
+def set_active_crypto(crypto_id: str) -> None:
+    st.session_state["active_crypto_id"] = crypto_id
+    crypto = get_crypto_config(crypto_id)
+    module_specs = supported_module_specs(crypto.supported_modules)
+    labels = [spec.label for spec in module_specs]
+    if st.session_state.get("active_module") not in labels:
+        st.session_state["active_module"] = labels[0]
+
+
+def render_crypto_selector(configs: dict[str, CryptoConfig]) -> CryptoConfig:
+    st.markdown('<div class="nav-row nav-row-top">', unsafe_allow_html=True)
+    cols = st.columns([1.15, 1, 1, 1, 1.15], gap="medium")
+    for col, crypto in zip(cols[1:4], configs.values()):
+        with col:
+            is_active = st.session_state["active_crypto_id"] == crypto.id
+            st.button(
+                f"{crypto.symbol} {crypto.name}",
+                key=f"crypto_{crypto.id}",
+                use_container_width=True,
+                type="primary" if is_active else "secondary",
+                on_click=set_active_crypto,
+                args=(crypto.id,),
+            )
+    st.markdown("</div>", unsafe_allow_html=True)
+    return get_crypto_config(st.session_state["active_crypto_id"])
+
+
+active_crypto = render_crypto_selector(CRYPTO_CONFIGS)
+
+st.markdown(
+    f'<div class="crypto-context">'
+    f'<p class="crypto-context-title">{active_crypto.name} · {active_crypto.ticker} · {active_crypto.consensus}</p>'
+    f'<p class="crypto-context-copy">{active_crypto.methodology}</p>'
+    f'</div>',
+    unsafe_allow_html=True,
+)
+
+module_specs = supported_module_specs(active_crypto.supported_modules)
+nav_options = [spec.label for spec in module_specs]
+if "active_module" not in st.session_state:
+    st.session_state["active_module"] = nav_options[0]
+if st.session_state["active_module"] not in nav_options:
+    st.session_state["active_module"] = nav_options[0]
+
+
+def set_active_module(module_name: str) -> None:
+    st.session_state["active_module"] = module_name
+
+
+def render_navigation(options: list[str]) -> str:
+    top_row = options[:4]
+    bottom_row = options[4:]
+
+    st.markdown('<div class="nav-row nav-row-top">', unsafe_allow_html=True)
+    top_cols = st.columns([0.35, 1, 1, 1, 1, 0.35], gap="medium")
+    for col, option in zip(top_cols[1:5], top_row):
+        with col:
+            is_active = st.session_state["active_module"] == option
+            st.button(
+                option,
+                key=f"nav_{option}",
+                use_container_width=True,
+                type="primary" if is_active else "secondary",
+                on_click=set_active_module,
+                args=(option,),
+            )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="nav-row nav-row-bottom">', unsafe_allow_html=True)
+    bottom_cols = st.columns([0.9, 1, 1, 1, 0.9], gap="medium")
+    for col, option in zip(bottom_cols[1:4], bottom_row):
+        with col:
+            is_active = st.session_state["active_module"] == option
+            st.button(
+                option,
+                key=f"nav_{option}",
+                use_container_width=True,
+                type="primary" if is_active else "secondary",
+                on_click=set_active_module,
+                args=(option,),
+            )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    return st.session_state["active_module"]
+
+
+module = render_navigation(nav_options)
+selected_module = module_by_label(module)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2744,18 +2859,564 @@ def render_m7() -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def render_ethereum_m1() -> None:
+    module_header("M1 — ETHEREUM NETWORK ACTIVITY MONITOR")
+    try:
+        blocks = load_eth_recent_blocks(24)
+    except Exception as e:
+        render_error(f"Could not fetch Ethereum data: {e}")
+        return
+    if not blocks:
+        render_error("No Ethereum block data returned.")
+        return
+
+    latest = blocks[0]
+    ordered = sorted(blocks, key=lambda b: b["number"])
+    block_times = [
+        ordered[i]["timestamp"] - ordered[i - 1]["timestamp"]
+        for i in range(1, len(ordered))
+        if ordered[i]["timestamp"] > ordered[i - 1]["timestamp"]
+    ]
+    avg_block_time = float(np.mean(block_times)) if block_times else 0.0
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Latest Block", f"{latest['number']:,}")
+    c2.metric("Transactions", f"{latest['tx_count']:,}")
+    c3.metric("Gas Used", f"{latest['gas_used']:,}")
+    c4.metric("Gas Utilization", f"{latest['gas_utilization'] * 100:.1f}%")
+    c5.metric("Base Fee", f"{latest['base_fee_gwei']:.2f} gwei")
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    col_chart, col_card = st.columns([3, 2], gap="medium")
+    with col_chart:
+        st.markdown(
+            '<div class="card"><div class="card-title">Recent Ethereum Block Time</div>',
+            unsafe_allow_html=True,
+        )
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=[b["number"] for b in ordered[1:]],
+            y=block_times,
+            marker_color=active_crypto.primary_color,
+            name="Block time",
+            hovertemplate="Block %{x}<br>%{y:.0f}s<extra></extra>",
+        ))
+        fig.add_hline(
+            y=12,
+            line_dash="dash",
+            line_color=active_crypto.secondary_color,
+            annotation_text="~12s slot time",
+            annotation_font=dict(family="Rajdhani", color=active_crypto.secondary_color, size=11),
+        )
+        apply_chart_style(fig)
+        fig.update_layout(
+            xaxis_title="Block number",
+            yaxis_title="Seconds",
+            height=330,
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_card:
+        st.markdown(
+            '<div class="card"><div class="card-title">Post-Merge Methodology</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.82rem;color:#6B7DA0;'
+            'line-height:1.65;margin:0;">'
+            'Ethereum is not mined with Proof of Work after The Merge. This monitor '
+            'therefore uses block production, gas utilization, transaction count and '
+            'base fee as live network activity indicators. Hashrate, nonce search and '
+            'difficulty retargeting are intentionally absent.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p class="field-label">Latest block hash</p>'
+            f'<p class="field-val">{latest["hash"]}</p>'
+            '<p class="field-label">Fee recipient / validator address</p>'
+            f'<p class="field-val">{latest["validator"]}</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_ethereum_m2() -> None:
+    module_header("M2 — ETHEREUM BLOCK HEADER ANALYZER")
+    try:
+        latest = load_eth_recent_blocks(1)[0]
+    except Exception as e:
+        render_error(f"Could not fetch Ethereum block header data: {e}")
+        return
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Block Number", f"{latest['number']:,}")
+    c2.metric("Transactions", f"{latest['tx_count']:,}")
+    c3.metric("Gas Limit", f"{latest['gas_limit']:,}")
+    c4.metric("Base Fee", f"{latest['base_fee_gwei']:.2f} gwei")
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    col_fields, col_roots = st.columns(2, gap="medium")
+    with col_fields:
+        st.markdown('<div class="card"><div class="card-title">Execution Block Fields</div>', unsafe_allow_html=True)
+        rows = [
+            ("Hash", latest["hash"]),
+            ("Parent Hash", latest["parent_hash"]),
+            ("Timestamp", latest["datetime"].strftime("%Y-%m-%d %H:%M:%S UTC")),
+            ("Fee Recipient", latest["validator"]),
+            ("Gas Used / Limit", f"{latest['gas_used']:,} / {latest['gas_limit']:,}"),
+        ]
+        st.markdown(
+            "".join(f'<p class="field-label">{k}</p><p class="field-val">{v}</p>' for k, v in rows),
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col_roots:
+        st.markdown('<div class="card"><div class="card-title">State Commitments</div>', unsafe_allow_html=True)
+        rows = [
+            ("State Root", latest["state_root"]),
+            ("Transactions Root", latest["transactions_root"]),
+            ("Receipts Root", latest["receipts_root"]),
+        ]
+        st.markdown(
+            "".join(f'<p class="field-label">{k}</p><p class="field-val">{v}</p>' for k, v in rows),
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            'line-height:1.55;">These roots are Ethereum Merkle-Patricia trie commitments. '
+            'They are the Ethereum analogue of committing to transaction/state data, but '
+            'they are not Bitcoin-style binary Merkle trees.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_litecoin_m1() -> None:
+    module_header("M1 — LITECOIN PROOF OF WORK MONITOR")
+    try:
+        blocks = load_ltc_recent_blocks(7)
+    except Exception as e:
+        render_error(f"Could not fetch Litecoin data: {e}")
+        return
+    if not blocks:
+        render_error("No Litecoin block data returned.")
+        return
+
+    latest = blocks[0]
+    difficulty = float(latest["difficulty"])
+    hashrate = difficulty * (2 ** 32) / 150
+    inter_times = get_inter_block_times(blocks)
+    avg_time = int(np.mean(inter_times)) if inter_times else 0
+    target_hex = f"{bits_to_target(int(latest['bits'])):064x}" if latest.get("bits") else "N/A"
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Block Height", f"{latest['height']:,}")
+    c2.metric("Difficulty", f"{difficulty:.2e}")
+    c3.metric("Est. Hash Rate", f"{hashrate / 1e12:.2f} TH/s")
+    c4.metric("Transactions", f"{latest['tx_count']:,}")
+    c5.metric("Avg Block Time", f"{avg_time} s")
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    col_hist, col_card = st.columns([3, 2], gap="medium")
+    with col_hist:
+        st.markdown('<div class="card"><div class="card-title">Litecoin Block Arrival Times</div>', unsafe_allow_html=True)
+        if inter_times:
+            fig = go.Figure()
+            fig.add_trace(go.Histogram(
+                x=inter_times,
+                nbinsx=18,
+                marker_color=active_crypto.primary_color,
+                name="Observed",
+                hovertemplate="%{x:.0f}s<extra></extra>",
+            ))
+            fig.add_vline(
+                x=150,
+                line_dash="dash",
+                line_color=active_crypto.secondary_color,
+                annotation_text="150s target",
+                annotation_font=dict(family="Rajdhani", color=active_crypto.secondary_color, size=11),
+            )
+            apply_chart_style(fig)
+            fig.update_layout(xaxis_title="Seconds between blocks", yaxis_title="Count", height=330, showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col_card:
+        st.markdown('<div class="card"><div class="card-title">Scrypt PoW Context</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<p class="field-label">Latest block hash</p>'
+            f'<p class="field-val">{latest["id"]}</p>'
+            '<p class="field-label">Decoded target threshold</p>'
+            f'<p class="field-val">{target_hex}</p>'
+            '<p class="field-label">Consensus note</p>'
+            '<p style="font-family:Inter,sans-serif;font-size:0.82rem;color:#6B7DA0;line-height:1.6;">'
+            'Litecoin is PoW like Bitcoin, but uses Scrypt rather than SHA256d as its mining hash. '
+            'The difficulty and target concepts transfer directly; the hardware/security model does not.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_litecoin_m2() -> None:
+    module_header("M2 — LITECOIN BLOCK HEADER ANALYZER")
+    try:
+        latest = load_ltc_recent_blocks(1)[0]
+    except Exception as e:
+        render_error(f"Could not fetch Litecoin block data: {e}")
+        return
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Height", f"{latest['height']:,}")
+    c2.metric("Version", f"{latest['version']}")
+    c3.metric("Nonce", f"{latest['nonce']:,}")
+    c4.metric("Size", f"{latest['size']:,} bytes")
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    st.markdown('<div class="card"><div class="card-title">Litecoin Header Fields From Explorer API</div>', unsafe_allow_html=True)
+    rows = [
+        ("Block Hash", latest["id"]),
+        ("Previous Hash", latest["previous_hash"]),
+        ("Merkle Root", latest["merkle_root"]),
+        ("Timestamp", latest["datetime"].strftime("%Y-%m-%d %H:%M:%S UTC") if latest["datetime"] else "N/A"),
+        ("Bits", f"0x{latest['bits']:08x}"),
+        ("Nonce", f"{latest['nonce']:,}"),
+    ]
+    st.markdown("".join(f'<p class="field-label">{k}</p><p class="field-val">{v}</p>' for k, v in rows), unsafe_allow_html=True)
+    st.markdown(
+        '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;line-height:1.55;">'
+        'This is the Litecoin analogue of the Bitcoin header view. Full manual PoW verification '
+        'requires reconstructing the raw 80-byte header and applying Litecoin Scrypt PoW, not '
+        'Bitcoin double-SHA256. That distinction is intentional.</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_crypto_variant_note(crypto: CryptoConfig, spec: ModuleSpec) -> None:
+    module_header(spec.title.replace("DIFFICULTY", "CONSENSUS"))
+    mode = crypto.module_modes.get(spec.id, "methodological_variant")
+    st.markdown(
+        f'<div class="card"><div class="card-title">{crypto.name} module variant</div>'
+        f'<p style="font-family:Inter,sans-serif;font-size:0.84rem;color:#6B7DA0;line-height:1.65;">'
+        f'This module needs a {crypto.name}-specific implementation before it can be graded as a '
+        f'full analytical module. It is registered here with the correct academic mapping so the '
+        f'next implementation phase does not copy Bitcoin assumptions blindly.</p>'
+        f'<p class="field-label">Purpose</p><p class="field-val">{spec.academic_purpose}</p>'
+        f'<p class="field-label">Variant</p><p class="field-val">{mode}</p>'
+        f'<p class="field-label">Data source</p><p class="field-val">{crypto.data_source}</p>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_ethereum_m3() -> None:
+    module_header("M3 — ETHEREUM GAS AND BLOCK ACTIVITY HISTORY")
+    try:
+        blocks = load_eth_recent_blocks(40)
+    except Exception as e:
+        render_error(f"Could not fetch Ethereum history: {e}")
+        return
+    ordered = sorted(blocks, key=lambda b: b["number"])
+    df = pd.DataFrame({
+        "number": [b["number"] for b in ordered],
+        "time": [b["datetime"] for b in ordered],
+        "gas_utilization": [b["gas_utilization"] * 100 for b in ordered],
+        "base_fee_gwei": [b["base_fee_gwei"] for b in ordered],
+        "tx_count": [b["tx_count"] for b in ordered],
+    })
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Blocks Sampled", f"{len(df):,}")
+    c2.metric("Avg Gas Util.", f"{df['gas_utilization'].mean():.1f}%")
+    c3.metric("Avg Base Fee", f"{df['base_fee_gwei'].mean():.2f} gwei")
+    c4.metric("Avg Tx / Block", f"{df['tx_count'].mean():.0f}")
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    st.markdown('<div class="card"><div class="card-title">Recent Gas Market History</div>', unsafe_allow_html=True)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df["time"], y=df["gas_utilization"], mode="lines+markers", name="Gas utilization (%)", line=dict(color=active_crypto.primary_color, width=2)))
+    fig.add_trace(go.Scatter(x=df["time"], y=df["base_fee_gwei"], mode="lines+markers", name="Base fee (gwei)", line=dict(color=active_crypto.secondary_color, width=2), yaxis="y2"))
+    apply_chart_style(fig)
+    fig.update_layout(height=360, xaxis_title="Time", yaxis_title="Gas utilization (%)", yaxis2=dict(title="Base fee (gwei)", overlaying="y", side="right", gridcolor="#1E2D5A"), legend=dict(bgcolor="rgba(15,22,41,0.85)"))
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("Ethereum has no Bitcoin-style difficulty retarget after The Merge; this module tracks the equivalent network-pressure variables.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_litecoin_m3() -> None:
+    module_header("M3 — LITECOIN DIFFICULTY AND TIMING HISTORY")
+    try:
+        blocks = load_ltc_recent_blocks(7)
+    except Exception as e:
+        render_error(f"Could not fetch Litecoin history: {e}")
+        return
+    ordered = sorted(blocks, key=lambda b: b["height"])
+    df = pd.DataFrame(ordered)
+    df["block_time"] = df["timestamp"].diff()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Blocks Sampled", f"{len(df):,}")
+    c2.metric("Latest Difficulty", f"{float(df['difficulty'].iloc[-1]):.2e}")
+    c3.metric("Avg Block Time", f"{df['block_time'].dropna().mean():.0f} s")
+    c4.metric("Target", "150 s")
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    st.markdown('<div class="card"><div class="card-title">Recent Litecoin Timing</div>', unsafe_allow_html=True)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=df["height"], y=df["block_time"], marker_color=active_crypto.primary_color, name="Block time"))
+    fig.add_hline(y=150, line_dash="dash", line_color=active_crypto.secondary_color, annotation_text="150s target")
+    apply_chart_style(fig)
+    fig.update_layout(height=340, xaxis_title="Height", yaxis_title="Seconds", showlegend=False)
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("Litecoin keeps the PoW difficulty concept, but uses a 150-second block target and Scrypt mining.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_ethereum_m4() -> None:
+    module_header("M4 — ETHEREUM ACTIVITY ANOMALY DETECTOR")
+    try:
+        blocks = load_eth_recent_blocks(60)
+    except Exception as e:
+        render_error(f"Could not fetch Ethereum activity data: {e}")
+        return
+    ordered = sorted(blocks, key=lambda b: b["number"])
+    df = pd.DataFrame({
+        "number": [b["number"] for b in ordered],
+        "time": [b["datetime"] for b in ordered],
+        "gas_utilization": [b["gas_utilization"] * 100 for b in ordered],
+        "tx_count": [b["tx_count"] for b in ordered],
+    })
+    df["gas_z"] = stats.zscore(df["gas_utilization"], nan_policy="omit")
+    df["anomaly"] = df["gas_z"].abs() >= 2.0
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Blocks Analyzed", f"{len(df):,}")
+    c2.metric("Mean Gas Util.", f"{df['gas_utilization'].mean():.1f}%")
+    c3.metric("Std. Dev.", f"{df['gas_utilization'].std():.1f} pp")
+    c4.metric("Anomalies", f"{int(df['anomaly'].sum())}")
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    st.markdown('<div class="card"><div class="card-title">Gas Utilization Anomaly Timeline</div>', unsafe_allow_html=True)
+    fig = go.Figure()
+    normal = df[~df["anomaly"]]
+    anomalous = df[df["anomaly"]]
+    fig.add_trace(go.Scatter(x=normal["time"], y=normal["gas_utilization"], mode="markers", marker=dict(color=active_crypto.secondary_color, size=6), name="Normal"))
+    fig.add_trace(go.Scatter(x=anomalous["time"], y=anomalous["gas_utilization"], mode="markers", marker=dict(color="#FF4560", size=10, symbol="x"), name="|z| >= 2"))
+    apply_chart_style(fig)
+    fig.update_layout(height=340, xaxis_title="Time", yaxis_title="Gas utilization (%)")
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("This is an Ethereum-specific anomaly signal: abnormal gas pressure, not abnormal PoW mining intervals.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_litecoin_m4() -> None:
+    module_header("M4 — LITECOIN INTER-ARRIVAL ANOMALY DETECTOR")
+    try:
+        blocks = load_ltc_recent_blocks(7)
+    except Exception as e:
+        render_error(f"Could not fetch Litecoin timing data: {e}")
+        return
+    df = build_inter_arrival_df(blocks)
+    if df.empty:
+        render_error("Not enough Litecoin intervals for anomaly detection.")
+        return
+    times = df["inter_arrival"].values.astype(float)
+    lam = 1 / float(times.mean())
+    mask = detect_statistical(times, lam)
+    df["anomaly"] = mask
+    df["datetime"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Intervals", f"{len(df):,}")
+    c2.metric("Mean", f"{times.mean():.0f} s")
+    c3.metric("Target", "150 s")
+    c4.metric("Anomalies", f"{int(mask.sum())}")
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    st.markdown('<div class="card"><div class="card-title">Litecoin Timing Outliers</div>', unsafe_allow_html=True)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df[~mask]["datetime"], y=df[~mask]["inter_arrival"], mode="markers", marker=dict(color=active_crypto.secondary_color, size=6), name="Normal"))
+    fig.add_trace(go.Scatter(x=df[mask]["datetime"], y=df[mask]["inter_arrival"], mode="markers", marker=dict(color="#FF4560", size=10, symbol="x"), name="Anomaly"))
+    fig.add_hline(y=150, line_dash="dash", line_color=active_crypto.primary_color, annotation_text="150s target")
+    apply_chart_style(fig)
+    fig.update_layout(height=340, xaxis_title="Time", yaxis_title="Seconds")
+    st.plotly_chart(fig, use_container_width=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_ethereum_m5() -> None:
+    module_header("M5 — ETHEREUM STATE COMMITMENTS")
+    render_ethereum_m2()
+
+
+def render_litecoin_m5() -> None:
+    module_header("M5 — LITECOIN MERKLE PROOF")
+    try:
+        latest = load_ltc_recent_blocks(1)[0]
+        txids = latest["raw"].get("txids", [])
+    except Exception as e:
+        render_error(f"Could not fetch Litecoin Merkle data: {e}")
+        return
+    if not txids:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Height", f"{latest['height']:,}")
+        c2.metric("Transactions", f"{latest['tx_count']:,}")
+        c3.metric("Data Source", latest.get("source", "Explorer"))
+        st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+        st.markdown('<div class="card"><div class="card-title">Litecoin Merkle Commitment</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<p class="field-label">Block hash</p>'
+            f'<p class="field-val">{latest["id"]}</p>'
+            '<p class="field-label">Merkle root</p>'
+            f'<p class="field-val">{latest["merkle_root"]}</p>'
+            '<p style="font-family:Inter,sans-serif;font-size:0.82rem;color:#6B7DA0;line-height:1.6;">'
+            'The current Litecoin source returns block-level Merkle commitments but not the full txid list. '
+            'So this view shows the authenticated root instead of fabricating an inclusion proof.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+    tx_index = min(len(txids) // 2, len(txids) - 1)
+    try:
+        proof = build_and_verify_merkle_proof(txids, tx_index, latest["merkle_root"])
+    except Exception as e:
+        render_error(f"Merkle computation error: {e}")
+        return
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Height", f"{latest['height']:,}")
+    c2.metric("Transactions", f"{len(txids):,}")
+    c3.metric("Proof Length", f"{proof['proof_length']} hashes")
+    c4.metric("Status", "VALID" if proof["valid"] else "INVALID")
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    st.markdown('<div class="card"><div class="card-title">Litecoin Transaction Inclusion</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<p class="field-label">Selected txid</p>'
+        f'<p class="field-val">{proof["selected_txid"]}</p>'
+        '<p class="field-label">Computed root</p>'
+        f'<p class="field-val">{proof["computed_root"]}</p>'
+        '<p class="field-label">Header root</p>'
+        f'<p class="field-val">{latest["merkle_root"]}</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_ethereum_m6() -> None:
+    module_header("M6 — ETHEREUM POS SECURITY SCORE")
+    try:
+        latest = load_eth_recent_blocks(1)[0]
+    except Exception as e:
+        render_error(f"Could not fetch Ethereum data: {e}")
+        return
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Latest Block", f"{latest['number']:,}")
+    c2.metric("Tx Count", f"{latest['tx_count']:,}")
+    c3.metric("Gas Util.", f"{latest['gas_utilization'] * 100:.1f}%")
+    c4.metric("Consensus", "PoS")
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    st.markdown('<div class="card"><div class="card-title">Security Model Difference</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<p style="font-family:Inter,sans-serif;font-size:0.84rem;color:#6B7DA0;line-height:1.65;">'
+        'Ethereum security is economic stake security, not ASIC energy cost. A correct full model should use '
+        'validator stake, finality, slashing assumptions and client diversity. This panel deliberately rejects '
+        'the Bitcoin 51% hashrate formula for Ethereum.</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_litecoin_m6() -> None:
+    module_header("M6 — LITECOIN SECURITY SCORE")
+    try:
+        latest = load_ltc_recent_blocks(1)[0]
+    except Exception as e:
+        render_error(f"Could not fetch Litecoin data: {e}")
+        return
+    network_hashrate = float(latest["difficulty"]) * (2 ** 32) / 150
+    attack_hashrate = estimate_attack_hashrate(network_hashrate, 0.30)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Network Hash Rate", f"{network_hashrate / 1e12:.2f} TH/s")
+    c2.metric("30% Attack Hashrate", f"{attack_hashrate / 1e12:.2f} TH/s")
+    c3.metric("Confirmations Model", "Nakamoto")
+    c4.metric("Hash Function", "Scrypt")
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    st.markdown('<div class="card"><div class="card-title">Scrypt Security Caveat</div>', unsafe_allow_html=True)
+    st.caption("The attacker-share probability model transfers from Nakamoto PoW, but hardware economics must be Scrypt-specific, not Bitcoin ASIC-specific.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_ethereum_m7() -> None:
+    module_header("M7 — ETHEREUM GAS UTILIZATION PREDICTOR")
+    try:
+        blocks = load_eth_recent_blocks(60)
+    except Exception as e:
+        render_error(f"Could not fetch Ethereum prediction data: {e}")
+        return
+    ordered = sorted(blocks, key=lambda b: b["number"])
+    y = np.array([b["gas_utilization"] * 100 for b in ordered], dtype=float)
+    x = np.arange(len(y), dtype=float)
+    slope, intercept = np.polyfit(x, y, 1)
+    pred = float(intercept + slope * len(y))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Samples", f"{len(y):,}")
+    c2.metric("Current Gas Util.", f"{y[-1]:.1f}%")
+    c3.metric("Next Linear Forecast", f"{max(0, min(100, pred)):.1f}%")
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    st.caption("This is a lightweight Ethereum-specific second AI variant: it predicts near-term gas pressure, not PoW difficulty.")
+
+
+def render_litecoin_m7() -> None:
+    module_header("M7 — LITECOIN BLOCK TIME PREDICTOR")
+    try:
+        blocks = load_ltc_recent_blocks(7)
+    except Exception as e:
+        render_error(f"Could not fetch Litecoin prediction data: {e}")
+        return
+    df = build_inter_arrival_df(blocks)
+    if len(df) < 3:
+        render_error("Not enough Litecoin intervals for prediction.")
+        return
+    y = df["inter_arrival"].values.astype(float)
+    x = np.arange(len(y), dtype=float)
+    slope, intercept = np.polyfit(x, y, 1)
+    pred = float(intercept + slope * len(y))
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Samples", f"{len(y):,}")
+    c2.metric("Recent Mean", f"{y.mean():.0f} s")
+    c3.metric("Next Linear Forecast", f"{max(0, pred):.0f} s")
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    st.caption("This compact predictor is intentionally about Litecoin block timing, not Bitcoin difficulty retarget history.")
+
+
 # ── Module routing ─────────────────────────────────────────────────────────────
-if module == "M1 — PoW Monitor":
-    render_m1()
-elif module == "M2 — Block Header Analyzer":
-    render_m2()
-elif module == "M3 — Difficulty History":
-    render_m3()
-elif module == "M4 — Anomaly Detector":
-    render_m4()
-elif module == "M5 — Merkle Proof":
-    render_m5()
-elif module == "M6 — Security Score":
-    render_m6()
-elif module == "M7 — Difficulty Predictor":
-    render_m7()
+BITCOIN_RENDERERS = {
+    "m1": render_m1,
+    "m2": render_m2,
+    "m3": render_m3,
+    "m4": render_m4,
+    "m5": render_m5,
+    "m6": render_m6,
+    "m7": render_m7,
+}
+
+ETHEREUM_RENDERERS = {
+    "m1": render_ethereum_m1,
+    "m2": render_ethereum_m2,
+    "m3": render_ethereum_m3,
+    "m4": render_ethereum_m4,
+    "m5": render_ethereum_m5,
+    "m6": render_ethereum_m6,
+    "m7": render_ethereum_m7,
+}
+
+LITECOIN_RENDERERS = {
+    "m1": render_litecoin_m1,
+    "m2": render_litecoin_m2,
+    "m3": render_litecoin_m3,
+    "m4": render_litecoin_m4,
+    "m5": render_litecoin_m5,
+    "m6": render_litecoin_m6,
+    "m7": render_litecoin_m7,
+}
+
+if active_crypto.id == "bitcoin":
+    BITCOIN_RENDERERS[selected_module.id]()
+elif active_crypto.id == "ethereum" and selected_module.id in ETHEREUM_RENDERERS:
+    ETHEREUM_RENDERERS[selected_module.id]()
+elif active_crypto.id == "litecoin" and selected_module.id in LITECOIN_RENDERERS:
+    LITECOIN_RENDERERS[selected_module.id]()
+else:
+    render_crypto_variant_note(active_crypto, selected_module)
