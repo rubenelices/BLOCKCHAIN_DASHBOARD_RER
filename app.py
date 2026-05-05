@@ -558,6 +558,7 @@ div[role="radiogroup"] label p {
 from api.blockchain_client import (
     get_block_blockstream,
     get_block_header_hex,
+    get_block_txids,
     get_recent_blocks,
     get_tip_hash,
 )
@@ -576,6 +577,15 @@ from modules.m4_ai_component import (
     evaluate_synthetic_anomalies,
     fit_exponential,
 )
+from modules.m5_merkle_proof import build_and_verify_merkle_proof
+from modules.m6_security_score import (
+    build_cost_curve,
+    build_probability_curve,
+    classify_security,
+    double_spend_probability,
+    estimate_attack_hashrate,
+    estimate_energy_cost_per_hour,
+)
 from api.blockchain_client import get_blocks_paginated
 
 # ── Cached API wrappers ───────────────────────────────────────────────────────
@@ -593,6 +603,11 @@ def load_block_header_hex(block_hash: str) -> str:
 @st.cache_data(ttl=60)
 def load_block_data(block_hash: str) -> dict:
     return get_block_blockstream(block_hash)
+
+
+@st.cache_data(ttl=3600)
+def load_block_txids(block_hash: str) -> list[str]:
+    return get_block_txids(block_hash)
 
 
 @st.cache_data(ttl=3600)
@@ -691,6 +706,13 @@ if "m2_hash" not in st.session_state:
         st.session_state["m2_hash"] = get_tip_hash()
     except Exception:
         st.session_state["m2_hash"] = ""
+if "m5_hash" not in st.session_state:
+    st.session_state["m5_hash"] = st.session_state.get("m2_hash", "")
+if not st.session_state.get("m5_hash"):
+    try:
+        st.session_state["m5_hash"] = get_tip_hash()
+    except Exception:
+        st.session_state["m5_hash"] = ""
 
 # ── Auto-refresh ──────────────────────────────────────────────────────────────
 st_autorefresh(interval=60_000, key="main_refresh")
@@ -784,6 +806,8 @@ module = st.radio(
         "M2 — Block Header Analyzer",
         "M3 — Difficulty History",
         "M4 — Anomaly Detector",
+        "M5 — Merkle Proof",
+        "M6 — Security Score",
     ],
     horizontal=True,
     label_visibility="collapsed",
@@ -1948,6 +1972,573 @@ def render_m4() -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# M5 — MERKLE PROOF VERIFIER
+# ─────────────────────────────────────────────────────────────────────────────
+def render_m5() -> None:
+    module_header("M5 — MERKLE PROOF VERIFIER")
+
+    def short_hash(value: str) -> str:
+        return value[:14] + "..." + value[-10:]
+
+    block_hash = st.text_input(
+        "Block hash for Merkle proof:",
+        key="m5_hash",
+        placeholder="Enter a 64-character block hash...",
+    )
+    block_hash = block_hash.strip().lower()
+
+    if not block_hash or len(block_hash) != 64:
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.85rem;color:#6B7DA0;">'
+            'Enter a valid 64-character block hash to verify a transaction inclusion proof.</p>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    try:
+        header_hex = load_block_header_hex(block_hash)
+        block_data = load_block_data(block_hash)
+        txids = load_block_txids(block_hash)
+    except Exception as e:
+        render_error(f"Could not fetch Merkle proof data: {e}")
+        return
+
+    if not txids:
+        render_error("No transaction IDs returned for this block.")
+        return
+
+    try:
+        fields = parse_header(header_hex)
+        merkle_root = fields["merkle_root"]
+    except Exception as e:
+        render_error(f"Could not parse block header: {e}")
+        return
+
+    default_index = min(len(txids) // 2, len(txids) - 1)
+    col_sl, col_sp = st.columns([2, 5])
+    with col_sl:
+        tx_index = st.slider(
+            "Transaction index",
+            min_value=0,
+            max_value=len(txids) - 1,
+            value=default_index,
+            key=f"m5_tx_index_{block_hash}",
+        )
+
+    try:
+        proof_result = build_and_verify_merkle_proof(txids, tx_index, merkle_root)
+    except Exception as e:
+        render_error(f"Merkle proof computation error: {e}")
+        return
+
+    selected_txid = proof_result["selected_txid"]
+    computed_root = proof_result["computed_root"]
+    proof_valid = proof_result["valid"]
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Block Height", f'{block_data.get("height", "?"):,}')
+    c2.metric("Transactions", f"{len(txids):,}")
+    c3.metric("Selected Index", f"{tx_index:,}")
+    c4.metric("Proof Length", f'{proof_result["proof_length"]} hashes')
+    status_color = "#1CE87A" if proof_valid else "#FF4560"
+    status_text = "VALID" if proof_valid else "INVALID"
+    with c5:
+        st.markdown(
+            custom_metric("Merkle Proof", status_text, status_color, status_color),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    col_summary, col_theory = st.columns([3, 2], gap="medium")
+    with col_summary:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Proof Target — Selected Transaction</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p class="field-label">Selected txid</p>'
+            f'<p class="field-val">{selected_txid}</p>'
+            '<p class="field-label">Computed Merkle root</p>'
+            f'<p class="field-val">{computed_root}</p>'
+            '<p class="field-label">Merkle root from block header</p>'
+            f'<p class="field-val">{merkle_root}</p>',
+            unsafe_allow_html=True,
+        )
+        banner_class = "result-valid" if proof_valid else "result-invalid"
+        banner_text = "MERKLE PROOF VERIFIED" if proof_valid else "MERKLE PROOF INVALID"
+        st.markdown(f'<div class="{banner_class}">{banner_text}</div>', unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_theory:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Why This Proves Inclusion</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.82rem;color:#6B7DA0;'
+            'line-height:1.65;margin:0;">'
+            'A Merkle proof uses only the selected transaction ID and one sibling hash '
+            'per tree level. Each parent is computed as '
+            '<code>SHA256(SHA256(left || right))</code>. If the final hash equals the '
+            'Merkle root stored in the 80-byte block header, the transaction is included '
+            'in that block. Bitcoin displays hashes in big-endian form, but Merkle '
+            'computations use internal little-endian byte order, so txids are reversed '
+            'before hashing and reversed back for display.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="card"><div class="card-title">'
+        'Merkle Proof Path — From Transaction To Root</div>',
+        unsafe_allow_html=True,
+    )
+
+    steps = proof_result["steps"]
+    if steps:
+        node_x = []
+        node_y = []
+        node_text = []
+        node_color = []
+        node_symbol = []
+        edge_x = []
+        edge_y = []
+
+        current_x = -0.55
+        sibling_x = 0.55
+        parent_x = 0.0
+
+        for idx, step in enumerate(steps):
+            y = len(steps) - idx
+            parent_y = y - 0.72
+
+            node_x.extend([current_x, sibling_x, parent_x])
+            node_y.extend([y, y, parent_y])
+            node_text.extend([
+                "Current<br>" + short_hash(step["current_hash"]),
+                f"Sibling ({step['sibling_side']})<br>" + short_hash(step["sibling_hash"]),
+                "Parent<br>" + short_hash(step["parent_hash"]),
+            ])
+            node_color.extend(["#00C2FF", "#F7931A", "#1CE87A"])
+            node_symbol.extend(["circle", "diamond", "square"])
+
+            edge_x.extend([current_x, parent_x, None, sibling_x, parent_x, None])
+            edge_y.extend([y, parent_y, None, y, parent_y, None])
+
+        fig_path = go.Figure()
+        fig_path.add_trace(go.Scatter(
+            x=edge_x,
+            y=edge_y,
+            mode="lines",
+            line=dict(color="rgba(107,125,160,0.55)", width=1.5),
+            hoverinfo="skip",
+            showlegend=False,
+        ))
+        fig_path.add_trace(go.Scatter(
+            x=node_x,
+            y=node_y,
+            mode="markers+text",
+            marker=dict(
+                size=18,
+                color=node_color,
+                symbol=node_symbol,
+                line=dict(color="#0A0E1A", width=2),
+            ),
+            text=node_text,
+            textposition="top center",
+            textfont=dict(family="Share Tech Mono", size=9, color="#E8EDF5"),
+            hovertemplate="%{text}<extra></extra>",
+            showlegend=False,
+        ))
+        fig_path.add_annotation(
+            x=0,
+            y=0,
+            text="Merkle root<br>" + short_hash(computed_root),
+            showarrow=False,
+            bgcolor="rgba(28,232,122,0.10)",
+            bordercolor="#1CE87A",
+            borderwidth=1,
+            borderpad=7,
+            font=dict(family="Share Tech Mono", size=10, color="#1CE87A"),
+        )
+        apply_chart_style(fig_path)
+        fig_path.update_layout(
+            height=max(420, 90 * min(len(steps), 12)),
+            xaxis=dict(visible=False, range=[-1.05, 1.05]),
+            yaxis=dict(visible=False, range=[-0.4, len(steps) + 1.2]),
+            margin=dict(t=30, b=20, l=20, r=20),
+        )
+        st.plotly_chart(fig_path, use_container_width=True)
+    else:
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.85rem;color:#6B7DA0;">'
+            'This block has a single transaction, so the transaction ID is already the Merkle root.</p>',
+            unsafe_allow_html=True,
+        )
+    st.markdown(
+        '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+        'margin-top:0;line-height:1.55;">'
+        'Blue nodes are the running hash, orange nodes are sibling hashes from the proof, '
+        'and green nodes are the double-SHA256 parents computed at each level.</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="card"><div class="card-title">'
+        'Step-by-Step Merkle Path Computation</div>',
+        unsafe_allow_html=True,
+    )
+
+    th_s = (
+        "padding:7px 12px;text-align:left;font-family:Rajdhani,sans-serif;"
+        "font-size:0.72rem;color:#6B7DA0;text-transform:uppercase;"
+        "letter-spacing:0.08em;border-bottom:2px solid #1E2D5A;"
+    )
+    thead = (
+        "<thead><tr>"
+        + "".join(
+            f'<th style="{th_s}">{h}</th>'
+            for h in ["Level", "Current hash", "Sibling side", "Sibling hash", "Parent hash"]
+        )
+        + "</tr></thead>"
+    )
+
+    rows = []
+    for step in proof_result["steps"]:
+        side_color = "#1CE87A" if step["sibling_side"] == "right" else "#F7931A"
+        rows.append(
+            '<tr onmouseover="this.style.background=\'rgba(0,194,255,0.04)\'"'
+            ' onmouseout="this.style.background=\'transparent\'">'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-weight:700;color:#E8EDF5;">'
+            f'{int(step["level"])}</td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:\'Share Tech Mono\',monospace;color:#00C2FF;">'
+            f'{short_hash(step["current_hash"])}</td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-weight:700;color:{side_color};">'
+            f'{step["sibling_side"].upper()}</td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:\'Share Tech Mono\',monospace;color:#F7931A;">'
+            f'{short_hash(step["sibling_hash"])}</td>'
+            f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:\'Share Tech Mono\',monospace;color:#1CE87A;">'
+            f'{short_hash(step["parent_hash"])}</td>'
+            "</tr>"
+        )
+
+    st.markdown(
+        f'<div style="overflow-x:auto;">'
+        f'<table style="width:100%;border-collapse:collapse;">'
+        f'{thead}<tbody>{"".join(rows)}</tbody></table></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+        'margin-top:12px;line-height:1.55;">'
+        'Each row hashes the current value with its sibling. The sibling side tells '
+        'whether the sibling is placed on the left or right before double-SHA256.</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M6 — SECURITY SCORE
+# ─────────────────────────────────────────────────────────────────────────────
+def render_m6() -> None:
+    module_header("M6 — SECURITY SCORE")
+
+    try:
+        blocks = load_recent_blocks(1)
+    except Exception as e:
+        render_error(f"Could not fetch current network data: {e}")
+        return
+
+    if not blocks:
+        render_error("No block data returned from API.")
+        return
+
+    latest = blocks[0]
+    difficulty = float(latest["difficulty"])
+    network_hashrate = estimate_hashrate(difficulty)
+
+    col_ctrl1, col_ctrl2, col_ctrl3, col_ctrl4 = st.columns(4)
+    with col_ctrl1:
+        attacker_percent = st.slider(
+            "Attacker hash power",
+            min_value=5,
+            max_value=49,
+            value=30,
+            step=1,
+            key="m6_attacker_percent",
+        )
+    with col_ctrl2:
+        confirmations = st.slider(
+            "Confirmations",
+            min_value=1,
+            max_value=20,
+            value=6,
+            step=1,
+            key="m6_confirmations",
+        )
+    with col_ctrl3:
+        efficiency = st.slider(
+            "ASIC efficiency (J/TH)",
+            min_value=10.0,
+            max_value=60.0,
+            value=20.0,
+            step=1.0,
+            key="m6_efficiency",
+        )
+    with col_ctrl4:
+        electricity_price = st.slider(
+            "Electricity (USD/kWh)",
+            min_value=0.01,
+            max_value=0.30,
+            value=0.05,
+            step=0.01,
+            key="m6_electricity",
+        )
+
+    q = attacker_percent / 100.0
+    attack_hashrate = estimate_attack_hashrate(network_hashrate, q)
+    energy = estimate_energy_cost_per_hour(
+        attack_hashrate,
+        efficiency,
+        electricity_price,
+    )
+    attack_prob = double_spend_probability(q, confirmations)
+    security_label = classify_security(attack_prob)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Network Hash Rate", f"{network_hashrate / 1e18:.1f} EH/s")
+    c2.metric("Attack Hash Rate", f"{attack_hashrate / 1e18:.1f} EH/s")
+    c3.metric("Energy / Hour", f"{energy['kwh_per_hour'] / 1e6:.2f}M kWh")
+    c4.metric("Cost / Hour", f"${energy['cost_usd_per_hour'] / 1e6:.2f}M")
+    sec_color = (
+        "#1CE87A" if security_label in {"Very high", "High"} else
+        "#F7931A" if security_label == "Moderate" else
+        "#FF4560"
+    )
+    with c5:
+        st.markdown(
+            custom_metric("Security Level", security_label.upper(), sec_color, sec_color),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    col_cost, col_prob = st.columns(2, gap="medium")
+
+    with col_cost:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Energy-Only 51% Attack Cost Lower Bound</div>',
+            unsafe_allow_html=True,
+        )
+        cost_df = build_cost_curve(
+            network_hashrate,
+            efficiency,
+            electricity_price,
+            min_share=0.05,
+            max_share=0.51,
+            points=35,
+        )
+        fig_cost = go.Figure()
+        fig_cost.add_trace(go.Scatter(
+            x=cost_df["attacker_percent"],
+            y=cost_df["cost_usd_per_hour"],
+            mode="lines",
+            fill="tozeroy",
+            name="Energy cost / hour",
+            line=dict(color="#00C2FF", width=2.5),
+            fillcolor="rgba(0,194,255,0.08)",
+            hovertemplate=(
+                "Attacker share: %{x:.1f}%<br>"
+                "Cost/hour: $%{y:,.0f}<extra></extra>"
+            ),
+        ))
+        fig_cost.add_vline(
+            x=51,
+            line_dash="dash",
+            line_color="#FF4560",
+            annotation_text="51%",
+            annotation_font=dict(family="Rajdhani", color="#FF4560", size=11),
+        )
+        fig_cost.add_vline(
+            x=attacker_percent,
+            line_dash="dot",
+            line_color="#F7931A",
+            annotation_text=f"Selected {attacker_percent}%",
+            annotation_font=dict(family="Rajdhani", color="#F7931A", size=11),
+        )
+        apply_chart_style(fig_cost)
+        fig_cost.update_layout(
+            xaxis_title="Attacker share of current network hash rate (%)",
+            yaxis_title="USD per hour",
+            showlegend=False,
+            height=350,
+        )
+        st.plotly_chart(fig_cost, use_container_width=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            'margin-top:0;line-height:1.55;">'
+            'This is an energy-only lower bound. It excludes ASIC purchase, hardware '
+            'availability, cooling, facilities, pool coordination, and market impact.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_prob:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Double-Spend Probability vs Confirmations</div>',
+            unsafe_allow_html=True,
+        )
+        prob_df = build_probability_curve([0.10, 0.20, 0.30, 0.40, q], max_confirmations=20)
+        fig_prob = go.Figure()
+        colors = {
+            10.0: "#1CE87A",
+            20.0: "#00C2FF",
+            30.0: "#F7931A",
+            40.0: "#FF4560",
+            round(attacker_percent, 1): "#E8EDF5",
+        }
+        for pct, group in prob_df.groupby("attacker_percent"):
+            pct_rounded = round(float(pct), 1)
+            line_width = 4 if abs(pct_rounded - attacker_percent) < 0.001 else 2
+            fig_prob.add_trace(go.Scatter(
+                x=group["confirmations"],
+                y=group["probability"],
+                mode="lines+markers",
+                name=f"q={pct_rounded:.0f}%",
+                line=dict(color=colors.get(pct_rounded, "#E8EDF5"), width=line_width),
+                marker=dict(size=5),
+                hovertemplate=(
+                    "Confirmations: %{x}<br>"
+                    "Success probability: %{y:.6f}<extra></extra>"
+                ),
+            ))
+        fig_prob.add_vline(
+            x=confirmations,
+            line_dash="dot",
+            line_color="#6B7DA0",
+            annotation_text=f"{confirmations} conf.",
+            annotation_font=dict(family="Rajdhani", color="#6B7DA0", size=11),
+        )
+        apply_chart_style(fig_prob)
+        fig_prob.update_layout(
+            xaxis_title="Confirmations",
+            yaxis_title="Attack success probability",
+            yaxis_type="log",
+            yaxis=dict(gridcolor="#1E2D5A", showgrid=True, type="log"),
+            showlegend=True,
+            legend=dict(
+                x=0.98, y=0.98, xanchor="right",
+                bgcolor="rgba(15,22,41,0.85)",
+                bordercolor="#1E2D5A", borderwidth=1,
+            ),
+            height=350,
+        )
+        st.plotly_chart(fig_prob, use_container_width=True)
+        st.markdown(
+            f'<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            f'margin-top:0;line-height:1.55;">'
+            f'For q={attacker_percent}% and {confirmations} confirmations, Nakamoto '
+            f'catch-up probability is <strong style="color:{sec_color};">'
+            f'{attack_prob:.6f}</strong>. The y-axis is logarithmic because security '
+            f'improves exponentially as confirmations increase.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    col_table, col_formula = st.columns([3, 2], gap="medium")
+    with col_table:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Confirmation Risk Table</div>',
+            unsafe_allow_html=True,
+        )
+        risk_rows = []
+        q_values = [0.10, 0.20, 0.30, 0.40, q]
+        q_values = sorted(set(round(v, 4) for v in q_values))
+        for z in [1, 2, 3, 6, 10, 15, 20]:
+            row = {"confirmations": z}
+            for qv in q_values:
+                row[f"q={qv*100:.0f}%"] = double_spend_probability(qv, z)
+            risk_rows.append(row)
+        risk_df = pd.DataFrame(risk_rows)
+
+        th_s = (
+            "padding:7px 10px;text-align:left;font-family:Rajdhani,sans-serif;"
+            "font-size:0.72rem;color:#6B7DA0;text-transform:uppercase;"
+            "letter-spacing:0.08em;border-bottom:2px solid #1E2D5A;"
+        )
+        headers = list(risk_df.columns)
+        thead = (
+            "<thead><tr>"
+            + "".join(f'<th style="{th_s}">{h}</th>' for h in headers)
+            + "</tr></thead>"
+        )
+        body = []
+        for _, row in risk_df.iterrows():
+            cells = [
+                f'<td style="padding:7px 10px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:Rajdhani,sans-serif;font-weight:700;color:#E8EDF5;">'
+                f'{int(row["confirmations"])}</td>'
+            ]
+            for col in headers[1:]:
+                prob = float(row[col])
+                color = "#1CE87A" if prob < 0.001 else "#00C2FF" if prob < 0.01 else "#F7931A" if prob < 0.05 else "#FF4560"
+                cells.append(
+                    f'<td style="padding:7px 10px;border-bottom:1px solid #1E2D5A;'
+                    f'font-family:\'Share Tech Mono\',monospace;color:{color};">'
+                    f'{prob:.6f}</td>'
+                )
+            body.append("<tr>" + "".join(cells) + "</tr>")
+        st.markdown(
+            f'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+            f'{thead}<tbody>{"".join(body)}</tbody></table></div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_formula:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Model Assumptions</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.82rem;color:#6B7DA0;'
+            'line-height:1.65;margin:0;">'
+            'The network hash rate is estimated from current difficulty as '
+            '<code>difficulty · 2^32 / 600</code>. Double-spend probability uses '
+            'Nakamoto 2008 section 11 with a Poisson approximation. Here '
+            '<code>q</code> is attacker hash power, <code>p=1-q</code>, and '
+            '<code>z</code> is confirmation depth. If <code>q ≥ 0.5</code>, the '
+            'attacker eventually catches up with probability 1.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
 # ── Module routing ─────────────────────────────────────────────────────────────
 if module == "M1 — PoW Monitor":
     render_m1()
@@ -1957,3 +2548,7 @@ elif module == "M3 — Difficulty History":
     render_m3()
 elif module == "M4 — Anomaly Detector":
     render_m4()
+elif module == "M5 — Merkle Proof":
+    render_m5()
+elif module == "M6 — Security Score":
+    render_m6()
