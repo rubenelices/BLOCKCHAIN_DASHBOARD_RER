@@ -2860,7 +2860,7 @@ def render_m7() -> None:
 
 
 def render_ethereum_m1() -> None:
-    module_header("M1 — ETHEREUM NETWORK ACTIVITY MONITOR")
+    module_header("M1 — ETHEREUM PROOF OF STAKE ACTIVITY MONITOR")
     try:
         blocks = load_eth_recent_blocks(24)
     except Exception as e:
@@ -2878,68 +2878,111 @@ def render_ethereum_m1() -> None:
         if ordered[i]["timestamp"] > ordered[i - 1]["timestamp"]
     ]
     avg_block_time = float(np.mean(block_times)) if block_times else 0.0
+    latest_gas_pct = latest["gas_utilization"] * 100
+    base_fee = latest["base_fee_gwei"]
+    stress_score = max(latest_gas_pct, min(base_fee * 8, 100))
+    if stress_score >= 75:
+        stress_label = "HIGH"
+        banner_text = "Gas demand above normal range"
+        banner_copy = "Recent blocks are close to the EIP-1559 gas target or fees are elevated."
+        banner_color = "#FF4560"
+    elif stress_score >= 45:
+        stress_label = "MEDIUM"
+        banner_text = "Gas demand inside normal range"
+        banner_copy = "Demand is close to the target gas budget."
+        banner_color = "#1CE87A"
+    else:
+        stress_label = "LOW"
+        banner_text = "Gas demand below normal range"
+        banner_copy = "Recent blocks are using a modest share of available gas."
+        banner_color = "#00D084"
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Latest Block", f"{latest['number']:,}")
-    c2.metric("Transactions", f"{latest['tx_count']:,}")
-    c3.metric("Gas Used", f"{latest['gas_used']:,}")
-    c4.metric("Gas Utilization", f"{latest['gas_utilization'] * 100:.1f}%")
-    c5.metric("Base Fee", f"{latest['base_fee_gwei']:.2f} gwei")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Block Height", f"{latest['number']:,}")
+    c2.metric("Base Fee", f"{base_fee:.2f} gwei")
+    c3.metric("Gas Used", f"{latest_gas_pct:.1f}%")
+    c4.metric("Block Time", f"{avg_block_time:.1f} s")
 
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
-    col_chart, col_card = st.columns([3, 2], gap="medium")
-    with col_chart:
+    col_info, col_stress = st.columns([3, 2], gap="medium")
+    with col_info:
         st.markdown(
-            '<div class="card"><div class="card-title">Recent Ethereum Block Time</div>',
+            '<div class="card"><div class="card-title">Latest Block Snapshot</div>',
             unsafe_allow_html=True,
         )
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            x=[b["number"] for b in ordered[1:]],
-            y=block_times,
-            marker_color=active_crypto.primary_color,
-            name="Block time",
-            hovertemplate="Block %{x}<br>%{y:.0f}s<extra></extra>",
-        ))
-        fig.add_hline(
-            y=12,
-            line_dash="dash",
-            line_color=active_crypto.secondary_color,
-            annotation_text="~12s slot time",
-            annotation_font=dict(family="Rajdhani", color=active_crypto.secondary_color, size=11),
+        st.markdown(
+            '<p class="field-label">Hash</p>'
+            f'<p class="field-val">{latest["hash"]}</p>'
+            '<p class="field-label">Timestamp</p>'
+            f'<p class="field-val">{latest["datetime"].strftime("%Y-%m-%d %H:%M:%S UTC")}</p>',
+            unsafe_allow_html=True,
         )
-        apply_chart_style(fig)
-        fig.update_layout(
-            xaxis_title="Block number",
-            yaxis_title="Seconds",
-            height=330,
-            showlegend=False,
+        ic1, ic2 = st.columns(2)
+        ic1.metric("Transactions", f"{latest['tx_count']:,}")
+        ic2.metric("Gas Price", f"{base_fee:.2f} gwei")
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col_stress:
+        st.markdown(
+            '<div class="card"><div class="card-title">Network Stress</div>',
+            unsafe_allow_html=True,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.markdown(
+            f'<div style="background:{banner_color}22;border:1px solid {banner_color}88;'
+            f'border-radius:8px;padding:16px;margin-bottom:18px;'
+            f'font-family:Rajdhani,sans-serif;font-size:1.1rem;font-weight:700;'
+            f'color:{banner_color};">{banner_text}</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            custom_metric("Network Stress", stress_label, banner_color, banner_color),
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f'<p style="font-family:Inter,sans-serif;font-size:0.8rem;color:#6B7DA0;'
+            f'line-height:1.6;margin-top:14px;">{banner_copy}</p>',
+            unsafe_allow_html=True,
+        )
         st.markdown("</div>", unsafe_allow_html=True)
 
-    with col_card:
-        st.markdown(
-            '<div class="card"><div class="card-title">Post-Merge Methodology</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<p style="font-family:Inter,sans-serif;font-size:0.82rem;color:#6B7DA0;'
-            'line-height:1.65;margin:0;">'
-            'Ethereum is not mined with Proof of Work after The Merge. This monitor '
-            'therefore uses block production, gas utilization, transaction count and '
-            'base fee as live network activity indicators. Hashrate, nonce search and '
-            'difficulty retargeting are intentionally absent.</p>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<p class="field-label">Latest block hash</p>'
-            f'<p class="field-val">{latest["hash"]}</p>'
-            '<p class="field-label">Fee recipient / validator address</p>'
-            f'<p class="field-val">{latest["validator"]}</p>',
-            unsafe_allow_html=True,
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="card"><div class="card-title">Recent Gas Utilization</div>',
+        unsafe_allow_html=True,
+    )
+    df = pd.DataFrame({
+        "time": [b["datetime"] for b in ordered],
+        "gas_used_pct": [b["gas_utilization"] * 100 for b in ordered],
+        "block": [b["number"] for b in ordered],
+    })
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["time"],
+        y=df["gas_used_pct"],
+        mode="lines",
+        line=dict(color=active_crypto.primary_color, width=3, shape="spline"),
+        fill="tozeroy",
+        fillcolor="rgba(98,126,234,0.18)",
+        hovertemplate="Block %{customdata}<br>Gas used: %{y:.1f}%<extra></extra>",
+        customdata=df["block"],
+        name="Gas used",
+    ))
+    fig.add_hline(
+        y=50,
+        line_dash="dash",
+        line_color=active_crypto.secondary_color,
+        annotation_text="EIP-1559 target utilization",
+        annotation_font=dict(family="Rajdhani", color=active_crypto.secondary_color, size=11),
+    )
+    apply_chart_style(fig)
+    fig.update_layout(
+        xaxis_title="Recent blocks",
+        yaxis_title="Gas used %",
+        height=340,
+        showlegend=False,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("50% is the EIP-1559 target utilization. Ethereum block production is PoS; gas pressure replaces PoW hash-rate pressure here.")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_ethereum_m2() -> None:
@@ -2994,7 +3037,7 @@ def render_ethereum_m2() -> None:
 
 
 def render_litecoin_m1() -> None:
-    module_header("M1 — LITECOIN PROOF OF WORK MONITOR")
+    module_header("M1 — LITECOIN SCRYPT PROOF OF WORK MONITOR")
     try:
         blocks = load_ltc_recent_blocks(7)
     except Exception as e:
@@ -3010,52 +3053,101 @@ def render_litecoin_m1() -> None:
     inter_times = get_inter_block_times(blocks)
     avg_time = int(np.mean(inter_times)) if inter_times else 0
     target_hex = f"{bits_to_target(int(latest['bits'])):064x}" if latest.get("bits") else "N/A"
+    ratio = avg_time / 150 if avg_time else 0
+    if ratio >= 1.25:
+        stress_label = "MEDIUM"
+        banner_text = "Block time above target"
+        banner_copy = "Recent Litecoin block production is slower than the 150s target."
+        banner_color = "#F7931A"
+    elif ratio <= 0.75 and ratio > 0:
+        stress_label = "MEDIUM"
+        banner_text = "Block time below target"
+        banner_copy = "Recent Litecoin blocks are arriving faster than the 150s target."
+        banner_color = "#1CE87A"
+    else:
+        stress_label = "LOW"
+        banner_text = "Block time inside normal range"
+        banner_copy = "Recent Litecoin block timing is close to target."
+        banner_color = active_crypto.primary_color
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Block Height", f"{latest['height']:,}")
     c2.metric("Difficulty", f"{difficulty:.2e}")
     c3.metric("Est. Hash Rate", f"{hashrate / 1e12:.2f} TH/s")
-    c4.metric("Transactions", f"{latest['tx_count']:,}")
-    c5.metric("Avg Block Time", f"{avg_time} s")
+    c4.metric("Block Time", f"{avg_time} s")
 
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
-    col_hist, col_card = st.columns([3, 2], gap="medium")
-    with col_hist:
-        st.markdown('<div class="card"><div class="card-title">Litecoin Block Arrival Times</div>', unsafe_allow_html=True)
-        if inter_times:
-            fig = go.Figure()
-            fig.add_trace(go.Histogram(
-                x=inter_times,
-                nbinsx=18,
-                marker_color=active_crypto.primary_color,
-                name="Observed",
-                hovertemplate="%{x:.0f}s<extra></extra>",
-            ))
-            fig.add_vline(
-                x=150,
-                line_dash="dash",
-                line_color=active_crypto.secondary_color,
-                annotation_text="150s target",
-                annotation_font=dict(family="Rajdhani", color=active_crypto.secondary_color, size=11),
-            )
-            apply_chart_style(fig)
-            fig.update_layout(xaxis_title="Seconds between blocks", yaxis_title="Count", height=330, showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+    col_info, col_stress = st.columns([3, 2], gap="medium")
+    with col_info:
+        st.markdown('<div class="card"><div class="card-title">Latest Block Snapshot</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<p class="field-label">Hash</p>'
+            f'<p class="field-val">{latest["id"]}</p>'
+            '<p class="field-label">Timestamp</p>'
+            f'<p class="field-val">{latest["datetime"].strftime("%Y-%m-%d %H:%M:%S UTC") if latest["datetime"] else "N/A"}</p>',
+            unsafe_allow_html=True,
+        )
+        ic1, ic2 = st.columns(2)
+        ic1.metric("Transactions", f"{latest['tx_count']:,}")
+        ic2.metric("Nonce", f"{latest['nonce']:,}")
         st.markdown("</div>", unsafe_allow_html=True)
-    with col_card:
+    with col_stress:
         st.markdown('<div class="card"><div class="card-title">Scrypt PoW Context</div>', unsafe_allow_html=True)
         st.markdown(
-            '<p class="field-label">Latest block hash</p>'
-            f'<p class="field-val">{latest["id"]}</p>'
-            '<p class="field-label">Decoded target threshold</p>'
-            f'<p class="field-val">{target_hex}</p>'
-            '<p class="field-label">Consensus note</p>'
-            '<p style="font-family:Inter,sans-serif;font-size:0.82rem;color:#6B7DA0;line-height:1.6;">'
-            'Litecoin is PoW like Bitcoin, but uses Scrypt rather than SHA256d as its mining hash. '
-            'The difficulty and target concepts transfer directly; the hardware/security model does not.</p>',
+            f'<div style="background:{banner_color}22;border:1px solid {banner_color}88;'
+            f'border-radius:8px;padding:16px;margin-bottom:18px;'
+            f'font-family:Rajdhani,sans-serif;font-size:1.1rem;font-weight:700;'
+            f'color:{banner_color};">{banner_text}</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(custom_metric("Network Stress", stress_label, banner_color, banner_color), unsafe_allow_html=True)
+        st.markdown(
+            f'<p style="font-family:Inter,sans-serif;font-size:0.8rem;color:#6B7DA0;'
+            f'line-height:1.6;margin-top:14px;">{banner_copy}</p>',
             unsafe_allow_html=True,
         )
         st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    st.markdown('<div class="card"><div class="card-title">Litecoin Block Arrival Times</div>', unsafe_allow_html=True)
+    if inter_times:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=list(range(1, len(inter_times) + 1)),
+            y=inter_times,
+            mode="lines",
+            line=dict(color=active_crypto.primary_color, width=3, shape="spline"),
+            fill="tozeroy",
+            fillcolor="rgba(0,208,132,0.14)",
+            name="Inter-block time",
+            hovertemplate="Interval %{x}<br>%{y:.0f}s<extra></extra>",
+        ))
+        fig.add_hline(
+            y=150,
+            line_dash="dash",
+            line_color=active_crypto.secondary_color,
+            annotation_text="150s target",
+            annotation_font=dict(family="Rajdhani", color=active_crypto.secondary_color, size=11),
+        )
+        apply_chart_style(fig)
+        fig.update_layout(xaxis_title="Most recent intervals", yaxis_title="Seconds", height=340, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+    st.markdown(
+        '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;line-height:1.55;">'
+        'Litecoin is PoW like Bitcoin, but uses Scrypt and targets 150 seconds per block. '
+        'Difficulty/target logic is comparable; mining hardware assumptions are not.</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+    st.markdown('<div class="card"><div class="card-title">Decoded Target Threshold</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<p class="field-label">Target threshold from bits</p>'
+        f'<p class="field-val">{target_hex}</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_litecoin_m2() -> None:
@@ -3125,48 +3217,83 @@ def render_ethereum_m3() -> None:
         "base_fee_gwei": [b["base_fee_gwei"] for b in ordered],
         "tx_count": [b["tx_count"] for b in ordered],
     })
+    df["block_time"] = pd.Series([b["timestamp"] for b in ordered]).diff().fillna(0)
+    df["fee_change_pct"] = df["base_fee_gwei"].pct_change() * 100
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Blocks Sampled", f"{len(df):,}")
     c2.metric("Avg Gas Util.", f"{df['gas_utilization'].mean():.1f}%")
     c3.metric("Avg Base Fee", f"{df['base_fee_gwei'].mean():.2f} gwei")
-    c4.metric("Avg Tx / Block", f"{df['tx_count'].mean():.0f}")
+    c4.metric("Avg Block Time", f"{df['block_time'].iloc[1:].mean():.1f} s")
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
-    st.markdown('<div class="card"><div class="card-title">Recent Gas Market History</div>', unsafe_allow_html=True)
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df["time"], y=df["gas_utilization"], mode="lines+markers", name="Gas utilization (%)", line=dict(color=active_crypto.primary_color, width=2)))
-    fig.add_trace(go.Scatter(x=df["time"], y=df["base_fee_gwei"], mode="lines+markers", name="Base fee (gwei)", line=dict(color=active_crypto.secondary_color, width=2), yaxis="y2"))
-    apply_chart_style(fig)
-    fig.update_layout(height=360, xaxis_title="Time", yaxis_title="Gas utilization (%)", yaxis2=dict(title="Base fee (gwei)", overlaying="y", side="right", gridcolor="#1E2D5A"), legend=dict(bgcolor="rgba(15,22,41,0.85)"))
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("Ethereum has no Bitcoin-style difficulty retarget after The Merge; this module tracks the equivalent network-pressure variables.")
-    st.markdown("</div>", unsafe_allow_html=True)
+    col_chart, col_table = st.columns([3, 2], gap="medium")
+    with col_chart:
+        st.markdown('<div class="card"><div class="card-title">Gas Market History</div>', unsafe_allow_html=True)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df["time"], y=df["gas_utilization"], mode="lines+markers", name="Gas utilization (%)", line=dict(color=active_crypto.primary_color, width=2.5)))
+        fig.add_trace(go.Scatter(x=df["time"], y=df["base_fee_gwei"], mode="lines+markers", name="Base fee (gwei)", line=dict(color=active_crypto.secondary_color, width=2), yaxis="y2"))
+        fig.add_hline(y=50, line_dash="dash", line_color="#6B7DA0", annotation_text="EIP-1559 target")
+        apply_chart_style(fig)
+        fig.update_layout(height=360, xaxis_title="Time", yaxis_title="Gas utilization (%)", yaxis2=dict(title="Base fee (gwei)", overlaying="y", side="right", gridcolor="#1E2D5A"), legend=dict(bgcolor="rgba(15,22,41,0.85)"))
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col_table:
+        st.markdown('<div class="card"><div class="card-title">Recent Blocks</div>', unsafe_allow_html=True)
+        rows = []
+        for _, row in df.tail(10).iloc[::-1].iterrows():
+            rows.append(
+                f'<tr><td style="padding:6px 8px;border-bottom:1px solid #1E2D5A;color:#E8EDF5;font-family:Rajdhani,sans-serif;">{int(row["number"]):,}</td>'
+                f'<td style="padding:6px 8px;border-bottom:1px solid #1E2D5A;color:{active_crypto.primary_color};font-family:Rajdhani,sans-serif;">{row["gas_utilization"]:.1f}%</td>'
+                f'<td style="padding:6px 8px;border-bottom:1px solid #1E2D5A;color:{active_crypto.secondary_color};font-family:Rajdhani,sans-serif;">{row["base_fee_gwei"]:.2f}</td>'
+                f'<td style="padding:6px 8px;border-bottom:1px solid #1E2D5A;color:#6B7DA0;font-family:Rajdhani,sans-serif;">{int(row["tx_count"]):,}</td></tr>'
+            )
+        st.markdown(
+            '<table style="width:100%;border-collapse:collapse;">'
+            '<thead><tr><th>Block</th><th>Gas</th><th>Fee</th><th>Tx</th></tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table>',
+            unsafe_allow_html=True,
+        )
+        st.caption("Ethereum has no Bitcoin-style difficulty retarget after The Merge; gas pressure and base fee are the meaningful history.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_litecoin_m3() -> None:
     module_header("M3 — LITECOIN DIFFICULTY AND TIMING HISTORY")
     try:
-        blocks = load_ltc_recent_blocks(7)
+        blocks = load_ltc_recent_blocks(20)
     except Exception as e:
         render_error(f"Could not fetch Litecoin history: {e}")
         return
     ordered = sorted(blocks, key=lambda b: b["height"])
     df = pd.DataFrame(ordered)
     df["block_time"] = df["timestamp"].diff()
+    df["hashrate_ths"] = df["difficulty"] * (2 ** 32) / 150 / 1e12
+    df["time_ratio"] = df["block_time"] / 150
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Blocks Sampled", f"{len(df):,}")
     c2.metric("Latest Difficulty", f"{float(df['difficulty'].iloc[-1]):.2e}")
     c3.metric("Avg Block Time", f"{df['block_time'].dropna().mean():.0f} s")
-    c4.metric("Target", "150 s")
+    c4.metric("Est. Hash Rate", f"{df['hashrate_ths'].iloc[-1]:.2f} TH/s")
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
-    st.markdown('<div class="card"><div class="card-title">Recent Litecoin Timing</div>', unsafe_allow_html=True)
-    fig = go.Figure()
-    fig.add_trace(go.Bar(x=df["height"], y=df["block_time"], marker_color=active_crypto.primary_color, name="Block time"))
-    fig.add_hline(y=150, line_dash="dash", line_color=active_crypto.secondary_color, annotation_text="150s target")
-    apply_chart_style(fig)
-    fig.update_layout(height=340, xaxis_title="Height", yaxis_title="Seconds", showlegend=False)
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("Litecoin keeps the PoW difficulty concept, but uses a 150-second block target and Scrypt mining.")
-    st.markdown("</div>", unsafe_allow_html=True)
+    col_time, col_hash = st.columns(2, gap="medium")
+    with col_time:
+        st.markdown('<div class="card"><div class="card-title">Recent Litecoin Timing</div>', unsafe_allow_html=True)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=df["height"], y=df["block_time"], marker_color=active_crypto.primary_color, name="Block time"))
+        fig.add_hline(y=150, line_dash="dash", line_color=active_crypto.secondary_color, annotation_text="150s target")
+        apply_chart_style(fig)
+        fig.update_layout(height=330, xaxis_title="Height", yaxis_title="Seconds", showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col_hash:
+        st.markdown('<div class="card"><div class="card-title">Difficulty And Estimated Hash Rate</div>', unsafe_allow_html=True)
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(x=df["height"], y=df["difficulty"], mode="lines+markers", name="Difficulty", line=dict(color=active_crypto.primary_color, width=2.5)))
+        fig2.add_trace(go.Scatter(x=df["height"], y=df["hashrate_ths"], mode="lines+markers", name="TH/s", line=dict(color=active_crypto.secondary_color, width=2), yaxis="y2"))
+        apply_chart_style(fig2)
+        fig2.update_layout(height=330, xaxis_title="Height", yaxis_title="Difficulty", yaxis2=dict(title="TH/s", overlaying="y", side="right", gridcolor="#1E2D5A"), legend=dict(bgcolor="rgba(15,22,41,0.85)"))
+        st.plotly_chart(fig2, use_container_width=True)
+        st.caption("Litecoin keeps PoW difficulty, but uses a 150-second target and Scrypt mining.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_ethereum_m4() -> None:
@@ -3182,32 +3309,46 @@ def render_ethereum_m4() -> None:
         "time": [b["datetime"] for b in ordered],
         "gas_utilization": [b["gas_utilization"] * 100 for b in ordered],
         "tx_count": [b["tx_count"] for b in ordered],
+        "base_fee_gwei": [b["base_fee_gwei"] for b in ordered],
     })
     df["gas_z"] = stats.zscore(df["gas_utilization"], nan_policy="omit")
+    df["fee_z"] = stats.zscore(df["base_fee_gwei"], nan_policy="omit")
     df["anomaly"] = df["gas_z"].abs() >= 2.0
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Blocks Analyzed", f"{len(df):,}")
     c2.metric("Mean Gas Util.", f"{df['gas_utilization'].mean():.1f}%")
     c3.metric("Std. Dev.", f"{df['gas_utilization'].std():.1f} pp")
-    c4.metric("Anomalies", f"{int(df['anomaly'].sum())}")
+    c4.metric("Gas Anomalies", f"{int(df['anomaly'].sum())}")
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
-    st.markdown('<div class="card"><div class="card-title">Gas Utilization Anomaly Timeline</div>', unsafe_allow_html=True)
-    fig = go.Figure()
-    normal = df[~df["anomaly"]]
-    anomalous = df[df["anomaly"]]
-    fig.add_trace(go.Scatter(x=normal["time"], y=normal["gas_utilization"], mode="markers", marker=dict(color=active_crypto.secondary_color, size=6), name="Normal"))
-    fig.add_trace(go.Scatter(x=anomalous["time"], y=anomalous["gas_utilization"], mode="markers", marker=dict(color="#FF4560", size=10, symbol="x"), name="|z| >= 2"))
-    apply_chart_style(fig)
-    fig.update_layout(height=340, xaxis_title="Time", yaxis_title="Gas utilization (%)")
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("This is an Ethereum-specific anomaly signal: abnormal gas pressure, not abnormal PoW mining intervals.")
-    st.markdown("</div>", unsafe_allow_html=True)
+    col_timeline, col_dist = st.columns([3, 2], gap="medium")
+    with col_timeline:
+        st.markdown('<div class="card"><div class="card-title">Gas Utilization Anomaly Timeline</div>', unsafe_allow_html=True)
+        fig = go.Figure()
+        normal = df[~df["anomaly"]]
+        anomalous = df[df["anomaly"]]
+        fig.add_trace(go.Scatter(x=normal["time"], y=normal["gas_utilization"], mode="markers", marker=dict(color=active_crypto.secondary_color, size=6), name="Normal"))
+        fig.add_trace(go.Scatter(x=anomalous["time"], y=anomalous["gas_utilization"], mode="markers", marker=dict(color="#FF4560", size=10, symbol="x"), name="|z| >= 2"))
+        fig.add_hline(y=df["gas_utilization"].mean(), line_dash="dash", line_color="#6B7DA0", annotation_text="Mean")
+        apply_chart_style(fig)
+        fig.update_layout(height=340, xaxis_title="Time", yaxis_title="Gas utilization (%)")
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col_dist:
+        st.markdown('<div class="card"><div class="card-title">Distribution And Scores</div>', unsafe_allow_html=True)
+        fig2 = go.Figure()
+        fig2.add_trace(go.Histogram(x=df["gas_utilization"], nbinsx=18, marker_color=active_crypto.primary_color, name="Gas util."))
+        fig2.add_vline(x=df["gas_utilization"].mean(), line_dash="dash", line_color=active_crypto.secondary_color, annotation_text="Mean")
+        apply_chart_style(fig2)
+        fig2.update_layout(height=260, xaxis_title="Gas utilization (%)", yaxis_title="Blocks", showlegend=False)
+        st.plotly_chart(fig2, use_container_width=True)
+        st.caption("Ethereum anomaly detection uses gas pressure z-scores. This is the PoS/EIP-1559 analogue of timing anomaly analysis.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_litecoin_m4() -> None:
     module_header("M4 — LITECOIN INTER-ARRIVAL ANOMALY DETECTOR")
     try:
-        blocks = load_ltc_recent_blocks(7)
+        blocks = load_ltc_recent_blocks(20)
     except Exception as e:
         render_error(f"Could not fetch Litecoin timing data: {e}")
         return
@@ -3226,15 +3367,27 @@ def render_litecoin_m4() -> None:
     c3.metric("Target", "150 s")
     c4.metric("Anomalies", f"{int(mask.sum())}")
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
-    st.markdown('<div class="card"><div class="card-title">Litecoin Timing Outliers</div>', unsafe_allow_html=True)
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df[~mask]["datetime"], y=df[~mask]["inter_arrival"], mode="markers", marker=dict(color=active_crypto.secondary_color, size=6), name="Normal"))
-    fig.add_trace(go.Scatter(x=df[mask]["datetime"], y=df[mask]["inter_arrival"], mode="markers", marker=dict(color="#FF4560", size=10, symbol="x"), name="Anomaly"))
-    fig.add_hline(y=150, line_dash="dash", line_color=active_crypto.primary_color, annotation_text="150s target")
-    apply_chart_style(fig)
-    fig.update_layout(height=340, xaxis_title="Time", yaxis_title="Seconds")
-    st.plotly_chart(fig, use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    col_timeline, col_hist = st.columns([3, 2], gap="medium")
+    with col_timeline:
+        st.markdown('<div class="card"><div class="card-title">Litecoin Timing Outliers</div>', unsafe_allow_html=True)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df[~mask]["datetime"], y=df[~mask]["inter_arrival"], mode="markers+lines", marker=dict(color=active_crypto.secondary_color, size=6), line=dict(color=active_crypto.secondary_color, width=1), name="Normal"))
+        fig.add_trace(go.Scatter(x=df[mask]["datetime"], y=df[mask]["inter_arrival"], mode="markers", marker=dict(color="#FF4560", size=10, symbol="x"), name="Anomaly"))
+        fig.add_hline(y=150, line_dash="dash", line_color=active_crypto.primary_color, annotation_text="150s target")
+        apply_chart_style(fig)
+        fig.update_layout(height=340, xaxis_title="Time", yaxis_title="Seconds")
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col_hist:
+        st.markdown('<div class="card"><div class="card-title">Inter-Arrival Distribution</div>', unsafe_allow_html=True)
+        fig2 = go.Figure()
+        fig2.add_trace(go.Histogram(x=times, nbinsx=12, marker_color=active_crypto.primary_color))
+        fig2.add_vline(x=150, line_dash="dash", line_color=active_crypto.secondary_color, annotation_text="150s")
+        apply_chart_style(fig2)
+        fig2.update_layout(height=260, xaxis_title="Seconds", yaxis_title="Count", showlegend=False)
+        st.plotly_chart(fig2, use_container_width=True)
+        st.caption("Same anomaly idea as Bitcoin, but with Litecoin's 150-second target and recent Scrypt PoW blocks.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_ethereum_m5() -> None:
@@ -3297,25 +3450,50 @@ def render_litecoin_m5() -> None:
 def render_ethereum_m6() -> None:
     module_header("M6 — ETHEREUM POS SECURITY SCORE")
     try:
-        latest = load_eth_recent_blocks(1)[0]
+        blocks = load_eth_recent_blocks(32)
     except Exception as e:
         render_error(f"Could not fetch Ethereum data: {e}")
         return
+    latest = blocks[0]
+    ordered = sorted(blocks, key=lambda b: b["number"])
+    gas_values = np.array([b["gas_utilization"] * 100 for b in ordered], dtype=float)
+    fee_values = np.array([b["base_fee_gwei"] for b in ordered], dtype=float)
+    fee_pressure = min(float(np.mean(fee_values)) * 8, 100)
+    gas_pressure = float(np.mean(gas_values))
+    liveness_score = max(0.0, 100.0 - abs(float(np.mean(np.diff([b["timestamp"] for b in ordered]))) - 12.0) * 4)
+    stress_index = 0.45 * gas_pressure + 0.35 * fee_pressure + 0.20 * (100 - liveness_score)
+    security_label = "HIGH" if stress_index < 45 else "MEDIUM" if stress_index < 70 else "ELEVATED"
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Latest Block", f"{latest['number']:,}")
-    c2.metric("Tx Count", f"{latest['tx_count']:,}")
-    c3.metric("Gas Util.", f"{latest['gas_utilization'] * 100:.1f}%")
-    c4.metric("Consensus", "PoS")
+    c2.metric("Avg Gas Util.", f"{gas_pressure:.1f}%")
+    c3.metric("Avg Base Fee", f"{np.mean(fee_values):.2f} gwei")
+    c4.metric("Security State", security_label)
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
-    st.markdown('<div class="card"><div class="card-title">Security Model Difference</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<p style="font-family:Inter,sans-serif;font-size:0.84rem;color:#6B7DA0;line-height:1.65;">'
-        'Ethereum security is economic stake security, not ASIC energy cost. A correct full model should use '
-        'validator stake, finality, slashing assumptions and client diversity. This panel deliberately rejects '
-        'the Bitcoin 51% hashrate formula for Ethereum.</p>',
-        unsafe_allow_html=True,
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
+    col_score, col_model = st.columns([3, 2], gap="medium")
+    with col_score:
+        st.markdown('<div class="card"><div class="card-title">PoS Network Pressure Index</div>', unsafe_allow_html=True)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=["Gas pressure", "Fee pressure", "Liveness"],
+            y=[gas_pressure, fee_pressure, liveness_score],
+            marker_color=[active_crypto.primary_color, active_crypto.secondary_color, "#1CE87A"],
+        ))
+        fig.add_hline(y=70, line_dash="dash", line_color="#FF4560", annotation_text="elevated")
+        apply_chart_style(fig)
+        fig.update_layout(height=320, yaxis_title="Score / 100", showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col_model:
+        st.markdown('<div class="card"><div class="card-title">Model Assumptions</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.82rem;color:#6B7DA0;line-height:1.65;">'
+            'Ethereum security is economic stake security, not ASIC energy cost. This score uses observable '
+            'network pressure as a dashboard proxy: gas utilization, base fee pressure, and block-production '
+            'liveness. A full research-grade PoS score would add validator stake, finality, slashing and client diversity.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(custom_metric("Composite Stress", f"{stress_index:.1f}/100", active_crypto.primary_color, active_crypto.primary_color), unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_litecoin_m6() -> None:
@@ -3327,15 +3505,33 @@ def render_litecoin_m6() -> None:
         return
     network_hashrate = float(latest["difficulty"]) * (2 ** 32) / 150
     attack_hashrate = estimate_attack_hashrate(network_hashrate, 0.30)
+    prob_6 = double_spend_probability(0.30, 6)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Network Hash Rate", f"{network_hashrate / 1e12:.2f} TH/s")
     c2.metric("30% Attack Hashrate", f"{attack_hashrate / 1e12:.2f} TH/s")
-    c3.metric("Confirmations Model", "Nakamoto")
+    c3.metric("P(success), 6 conf.", f"{prob_6:.4f}")
     c4.metric("Hash Function", "Scrypt")
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
-    st.markdown('<div class="card"><div class="card-title">Scrypt Security Caveat</div>', unsafe_allow_html=True)
-    st.caption("The attacker-share probability model transfers from Nakamoto PoW, but hardware economics must be Scrypt-specific, not Bitcoin ASIC-specific.")
-    st.markdown("</div>", unsafe_allow_html=True)
+    col_prob, col_note = st.columns([3, 2], gap="medium")
+    with col_prob:
+        st.markdown('<div class="card"><div class="card-title">Double-Spend Probability Curve</div>', unsafe_allow_html=True)
+        prob_df = build_probability_curve([0.10, 0.20, 0.30, 0.40], max_confirmations=20)
+        fig = go.Figure()
+        for pct, group in prob_df.groupby("attacker_percent"):
+            fig.add_trace(go.Scatter(x=group["confirmations"], y=group["probability"], mode="lines+markers", name=f"q={pct:.0f}%"))
+        apply_chart_style(fig)
+        fig.update_layout(height=330, xaxis_title="Confirmations", yaxis_title="Attack success probability", yaxis_type="log", legend=dict(bgcolor="rgba(15,22,41,0.85)"))
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col_note:
+        st.markdown('<div class="card"><div class="card-title">Scrypt Security Caveat</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.82rem;color:#6B7DA0;line-height:1.65;">'
+            'The Nakamoto attacker-share probability model transfers to Litecoin as PoW. The cost model does not transfer directly from Bitcoin, because Litecoin mining uses Scrypt-specific hardware economics.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(custom_metric("Consensus", "PoW / Scrypt", active_crypto.primary_color, active_crypto.primary_color), unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_ethereum_m7() -> None:
@@ -3349,19 +3545,33 @@ def render_ethereum_m7() -> None:
     y = np.array([b["gas_utilization"] * 100 for b in ordered], dtype=float)
     x = np.arange(len(y), dtype=float)
     slope, intercept = np.polyfit(x, y, 1)
+    fitted = intercept + slope * x
     pred = float(intercept + slope * len(y))
-    c1, c2, c3 = st.columns(3)
+    mae = float(np.mean(np.abs(y - fitted)))
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Samples", f"{len(y):,}")
     c2.metric("Current Gas Util.", f"{y[-1]:.1f}%")
-    c3.metric("Next Linear Forecast", f"{max(0, min(100, pred)):.1f}%")
+    c3.metric("Next Forecast", f"{max(0, min(100, pred)):.1f}%")
+    c4.metric("In-sample MAE", f"{mae:.2f} pp")
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
-    st.caption("This is a lightweight Ethereum-specific second AI variant: it predicts near-term gas pressure, not PoW difficulty.")
+    st.markdown('<div class="card"><div class="card-title">Gas Utilization Forecast Backtest</div>', unsafe_allow_html=True)
+    fig = go.Figure()
+    times = [b["datetime"] for b in ordered]
+    fig.add_trace(go.Scatter(x=times, y=y, mode="lines+markers", name="Observed gas utilization", line=dict(color=active_crypto.primary_color, width=2.5)))
+    fig.add_trace(go.Scatter(x=times, y=fitted, mode="lines", name="Linear fit", line=dict(color=active_crypto.secondary_color, width=2, dash="dash")))
+    fig.add_trace(go.Scatter(x=[times[-1], times[-1] + pd.Timedelta(seconds=12)], y=[y[-1], max(0, min(100, pred))], mode="lines+markers", name="Next forecast", line=dict(color="#1CE87A", width=3)))
+    fig.add_hline(y=50, line_dash="dot", line_color="#6B7DA0", annotation_text="EIP-1559 target")
+    apply_chart_style(fig)
+    fig.update_layout(height=360, xaxis_title="Recent blocks", yaxis_title="Gas utilization (%)", legend=dict(bgcolor="rgba(15,22,41,0.85)"))
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("This Ethereum-specific second AI variant predicts near-term gas pressure, not PoW difficulty.")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_litecoin_m7() -> None:
     module_header("M7 — LITECOIN BLOCK TIME PREDICTOR")
     try:
-        blocks = load_ltc_recent_blocks(7)
+        blocks = load_ltc_recent_blocks(20)
     except Exception as e:
         render_error(f"Could not fetch Litecoin prediction data: {e}")
         return
@@ -3372,13 +3582,27 @@ def render_litecoin_m7() -> None:
     y = df["inter_arrival"].values.astype(float)
     x = np.arange(len(y), dtype=float)
     slope, intercept = np.polyfit(x, y, 1)
+    fitted = intercept + slope * x
     pred = float(intercept + slope * len(y))
-    c1, c2, c3 = st.columns(3)
+    mae = float(np.mean(np.abs(y - fitted)))
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Samples", f"{len(y):,}")
     c2.metric("Recent Mean", f"{y.mean():.0f} s")
-    c3.metric("Next Linear Forecast", f"{max(0, pred):.0f} s")
+    c3.metric("Next Forecast", f"{max(0, pred):.0f} s")
+    c4.metric("In-sample MAE", f"{mae:.0f} s")
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
-    st.caption("This compact predictor is intentionally about Litecoin block timing, not Bitcoin difficulty retarget history.")
+    st.markdown('<div class="card"><div class="card-title">Litecoin Block-Time Forecast Backtest</div>', unsafe_allow_html=True)
+    fig = go.Figure()
+    heights = df["height"].values
+    fig.add_trace(go.Scatter(x=heights, y=y, mode="lines+markers", name="Observed inter-arrival", line=dict(color=active_crypto.primary_color, width=2.5)))
+    fig.add_trace(go.Scatter(x=heights, y=fitted, mode="lines", name="Linear fit", line=dict(color=active_crypto.secondary_color, width=2, dash="dash")))
+    fig.add_trace(go.Scatter(x=[heights[-1], heights[-1] + 1], y=[y[-1], max(0, pred)], mode="lines+markers", name="Next forecast", line=dict(color="#1CE87A", width=3)))
+    fig.add_hline(y=150, line_dash="dot", line_color="#6B7DA0", annotation_text="150s target")
+    apply_chart_style(fig)
+    fig.update_layout(height=360, xaxis_title="Block height", yaxis_title="Seconds", legend=dict(bgcolor="rgba(15,22,41,0.85)"))
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("This predictor is about Litecoin block timing. It is not a Bitcoin difficulty-retarget model copied blindly.")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ── Module routing ─────────────────────────────────────────────────────────────

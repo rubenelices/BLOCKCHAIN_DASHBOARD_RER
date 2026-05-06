@@ -116,7 +116,7 @@ def get_latest_block() -> dict:
 
 def get_recent_blocks(count: int = 20) -> list[dict]:
     """Return recent normalized Litecoin blocks in descending order."""
-    count = max(1, min(count, 7))
+    count = max(1, min(count, 20))
     try:
         blocks = get_recent_blocks_blockchair(count)
         if blocks:
@@ -124,6 +124,7 @@ def get_recent_blocks(count: int = 20) -> list[dict]:
     except requests.RequestException:
         pass
 
+    count = min(count, 7)
     blocks = []
     current = get_latest_block()
     while current and len(blocks) < count:
