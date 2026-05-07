@@ -579,6 +579,7 @@ from api.ethereum_client import get_block_by_number as get_eth_block_by_number
 from api.ethereum_client import get_recent_blocks as get_eth_recent_blocks
 from api.litecoin_client import get_latest_block as get_ltc_latest_block
 from api.litecoin_client import get_recent_blocks as get_ltc_recent_blocks
+from api.market_client import get_market_prices
 from modules.m1_pow_monitor import (
     bits_to_target,
     count_leading_zero_bits,
@@ -652,7 +653,47 @@ def load_ltc_recent_blocks(count: int) -> list[dict]:
     return get_ltc_recent_blocks(count)
 
 
+@st.cache_data(ttl=30)
+def load_market_prices() -> list[dict]:
+    return get_market_prices()
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def render_market_ticker() -> None:
+    try:
+        prices = load_market_prices()
+    except Exception:
+        prices = []
+
+    if not prices:
+        return
+
+    items = []
+    source = prices[0].get("source", "Market API")
+    updated_at = prices[0].get("updated_at", "UTC")
+    for row in prices:
+        change = float(row["change_24h"])
+        direction = "up" if change > 0 else "down" if change < 0 else "flat"
+        arrow = "▲" if change > 0 else "▼" if change < 0 else "■"
+        price = float(row["price_usd"])
+        price_str = f"${price:,.2f}" if price < 10_000 else f"${price:,.0f}"
+        items.append(
+            f'<div class="market-item">'
+            f'<div class="market-symbol">{row["ticker"]} · {row["name"]}</div>'
+            f'<div class="market-price">{price_str}</div>'
+            f'<div class="market-change market-{direction}">{arrow} {change:+.2f}%</div>'
+            f'</div>'
+        )
+
+    st.markdown(
+        f'<div class="market-ticker">'
+        f'<div class="market-ticker-meta">LIVE MARKET · {source} · UPDATED {updated_at}</div>'
+        f'<div class="market-ticker-track">{"".join(items)}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
 
 def apply_chart_style(fig: go.Figure) -> go.Figure:
     colors = chart_colors(active_crypto)
@@ -848,6 +889,8 @@ st.markdown(f"""
 }})();
 </script>
 """, unsafe_allow_html=True)
+
+render_market_ticker()
 
 # ── Cryptocurrency selector + navigation pills ───────────────────────────────
 def set_active_crypto(crypto_id: str) -> None:

@@ -185,6 +185,85 @@ div[data-testid="stButton"] > button[kind="primary"] {{
     background:
         linear-gradient(180deg, color-mix(in srgb, {primary} 7%, #0F1629) 0%, #0A1020 100%) !important;
 }}
+.market-ticker {{
+    max-width: 1240px;
+    margin: 2px auto 20px auto;
+    border: 1px solid color-mix(in srgb, {primary} 34%, #1E2D5A);
+    border-radius: 10px;
+    background:
+        linear-gradient(90deg,
+            color-mix(in srgb, {primary} 16%, rgba(8,12,22,0.92)) 0%,
+            rgba(8,12,22,0.94) 48%,
+            color-mix(in srgb, {secondary} 12%, rgba(8,12,22,0.92)) 100%);
+    box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.04),
+        0 14px 34px rgba(0,0,0,0.24);
+    overflow: hidden;
+}}
+.market-ticker-meta {{
+    padding: 7px 18px 6px 18px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-family: "Share Tech Mono", monospace;
+    color: color-mix(in srgb, {secondary} 78%, #6B7DA0);
+    font-size: 0.66rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}}
+.market-ticker-track {{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+}}
+.market-item {{
+    position: relative;
+    padding: 12px 18px;
+    border-right: 1px solid rgba(255,255,255,0.06);
+    font-family: Rajdhani, sans-serif;
+}}
+.market-item:last-child {{ border-right: none; }}
+.market-symbol {{
+    color: color-mix(in srgb, {primary} 62%, #FFFFFF);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}}
+.market-price {{
+    color: #F4F7FF;
+    font-size: 1.15rem;
+    font-weight: 800;
+    line-height: 1.1;
+    margin-top: 2px;
+}}
+.market-change {{
+    position: absolute;
+    right: 18px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-family: "Share Tech Mono", monospace;
+    font-size: 0.82rem;
+    padding: 4px 8px;
+    border-radius: 999px;
+}}
+.market-up {{
+    color: #1CE87A;
+    background: rgba(28,232,122,0.11);
+    border: 1px solid rgba(28,232,122,0.28);
+}}
+.market-down {{
+    color: #FF4560;
+    background: rgba(255,69,96,0.10);
+    border: 1px solid rgba(255,69,96,0.28);
+}}
+.market-flat {{
+    color: #C0C0C0;
+    background: rgba(192,192,192,0.08);
+    border: 1px solid rgba(192,192,192,0.20);
+}}
+@media (max-width: 820px) {{
+    .market-ticker-track {{ grid-template-columns: 1fr; }}
+    .market-item {{ border-right: none; border-bottom: 1px solid rgba(255,255,255,0.06); }}
+    .market-item:last-child {{ border-bottom: none; }}
+}}
 </style>
 """
 
