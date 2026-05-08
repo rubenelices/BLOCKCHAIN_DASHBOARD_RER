@@ -139,3 +139,84 @@ def get_recent_blocks(count: int = 20) -> list[dict]:
                 break
             raise
     return blocks
+
+
+def get_recent_blocks_paginated(count: int = 200) -> list[dict]:
+    """Fetch up to ``count`` recent Litecoin blocks via Blockchair pagination.
+
+    Blockchair allows up to 100 blocks per request. We page backwards from the
+    tip until we have enough rows. Used by M4/M7 LTC, where bulk timing data
+    is needed for proper distribution analysis.
+    """
+    if count <= 0:
+        return []
+    page_size = 100
+    blocks: list[dict] = []
+    offset = 0
+    while len(blocks) < count:
+        n = min(page_size, count - len(blocks))
+        response = requests.get(
+            f"{BLOCKCHAIR_LTC_URL}/blocks",
+            params={"limit": n, "offset": offset},
+            timeout=15,
+        )
+        response.raise_for_status()
+        data = response.json().get("data", [])
+        if not data:
+            break
+        blocks.extend(_normalize_blockchair_block(item) for item in data)
+        offset += len(data)
+        if len(data) < n:
+            break
+    return blocks
+
+
+def fetch_ltc_adjustment_blocks(n_periods: int = 24) -> list[dict]:
+    """Fetch Litecoin blocks at every difficulty-adjustment height.
+
+    Litecoin retargets every 2016 blocks just like Bitcoin. This walks
+    backwards from the latest adjustment boundary and returns the minimal
+    fields M3/M7 need: height, timestamp, difficulty, bits.
+    """
+    if n_periods <= 0:
+        return []
+
+    stats_resp = requests.get(f"{BLOCKCHAIR_LTC_URL}/stats", timeout=12)
+    stats_resp.raise_for_status()
+    stats_data = stats_resp.json().get("data", {})
+    tip_height = int(stats_data.get("blocks", 0)) - 1
+    if tip_height <= 0:
+        return []
+    latest_adj = (tip_height // 2016) * 2016
+
+    blocks: list[dict] = []
+    for i in range(n_periods):
+        height = latest_adj - i * 2016
+        if height < 0:
+            break
+        try:
+            r = requests.get(
+                f"{BLOCKCHAIR_LTC_URL}/dashboards/block/{height}",
+                timeout=15,
+            )
+            r.raise_for_status()
+            payload = r.json().get("data", {})
+            entry = payload.get(str(height)) or next(iter(payload.values()), None) or {}
+            block = entry.get("block") if isinstance(entry, dict) else None
+            if not block:
+                continue
+            timestamp = _parse_time(block["time"]) if block.get("time") else 0
+            difficulty = float(block.get("difficulty", 0.0) or 0.0)
+            bits_raw = block.get("bits", 0)
+            bits = int(bits_raw, 16) if isinstance(bits_raw, str) else int(bits_raw or 0)
+            blocks.append({
+                "height": height,
+                "timestamp": timestamp,
+                "difficulty": difficulty,
+                "bits": bits,
+            })
+        except (requests.RequestException, ValueError, KeyError):
+            continue
+
+    blocks.sort(key=lambda b: b["height"])
+    return blocks

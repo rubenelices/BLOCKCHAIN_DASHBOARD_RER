@@ -39,20 +39,25 @@ def fetch_adjustment_blocks(n_periods: int = 10) -> list[dict]:
     return blocks
 
 
-def build_adjustment_dataframe(blocks: list[dict]) -> pd.DataFrame:
+def build_adjustment_dataframe(blocks: list[dict], target_block_time: int = TARGET_BLOCK_TIME) -> pd.DataFrame:
     """Build a DataFrame with one row per adjustment period.
+
+    The ``target_block_time`` argument lets non-Bitcoin chains reuse this
+    helper. Bitcoin keeps the default of 600s; Litecoin passes 150s so the
+    ratio column reflects the Litecoin retarget assumption rather than the
+    Bitcoin one.
 
     Columns added beyond the raw block fields:
         date            — timestamp as datetime
         actual_period_s — seconds between this and the previous adjustment block
-        ratio           — actual_period_s / (ADJUSTMENT_PERIOD * TARGET_BLOCK_TIME)
+        ratio           — actual_period_s / (ADJUSTMENT_PERIOD * target_block_time)
         pct_change      — % change in difficulty vs previous period
         next_difficulty — predicted difficulty for the next period
     """
     df = pd.DataFrame(blocks)
     df["date"] = pd.to_datetime(df["timestamp"], unit="s")
 
-    target_period = ADJUSTMENT_PERIOD * TARGET_BLOCK_TIME  # 2016 * 600 = 1_209_600 s
+    target_period = ADJUSTMENT_PERIOD * target_block_time
 
     df["actual_period_s"] = df["timestamp"].diff()
     df["ratio"]           = df["actual_period_s"] / target_period

@@ -577,8 +577,11 @@ from api.blockchain_client import (
 )
 from api.ethereum_client import get_block_by_number as get_eth_block_by_number
 from api.ethereum_client import get_recent_blocks as get_eth_recent_blocks
+from api.ethereum_client import get_recent_blocks_batched as get_eth_recent_blocks_batched
+from api.litecoin_client import fetch_ltc_adjustment_blocks
 from api.litecoin_client import get_latest_block as get_ltc_latest_block
 from api.litecoin_client import get_recent_blocks as get_ltc_recent_blocks
+from api.litecoin_client import get_recent_blocks_paginated as get_ltc_recent_blocks_paginated
 from api.market_client import get_market_prices
 from modules.m1_pow_monitor import (
     bits_to_target,
@@ -653,6 +656,21 @@ def load_ltc_recent_blocks(count: int) -> list[dict]:
     return get_ltc_recent_blocks(count)
 
 
+@st.cache_data(ttl=300)
+def load_eth_blocks_batched(count: int) -> list[dict]:
+    return get_eth_recent_blocks_batched(count)
+
+
+@st.cache_data(ttl=300)
+def load_ltc_blocks_paginated(count: int) -> list[dict]:
+    return get_ltc_recent_blocks_paginated(count)
+
+
+@st.cache_data(ttl=3600)
+def load_ltc_adjustment_blocks(n_periods: int) -> list[dict]:
+    return fetch_ltc_adjustment_blocks(n_periods)
+
+
 @st.cache_data(ttl=30)
 def load_market_prices() -> list[dict]:
     return get_market_prices()
@@ -719,6 +737,15 @@ def render_error(msg: str) -> None:
         f'{msg}</span></div>',
         unsafe_allow_html=True,
     )
+
+
+def hex_to_rgba(hex_color: str, alpha: float = 1.0) -> str:
+    """Convert a #RRGGBB hex string to an rgba() string Plotly accepts."""
+    h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
 
 
 def make_bit_bar(n_zeros: int, zero_color: str, free_color: str, total: int = 256) -> str:
@@ -3339,103 +3366,1223 @@ def render_litecoin_m3() -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_ethereum_m4() -> None:
-    module_header("M4 — ETHEREUM ACTIVITY ANOMALY DETECTOR")
-    try:
-        blocks = load_eth_recent_blocks(60)
-    except Exception as e:
-        render_error(f"Could not fetch Ethereum activity data: {e}")
-        return
+def _eth_m4_build_dataframe(blocks: list[dict]) -> pd.DataFrame:
+    """Order ETH blocks ascending and add hour_of_day for IF features."""
     ordered = sorted(blocks, key=lambda b: b["number"])
     df = pd.DataFrame({
         "number": [b["number"] for b in ordered],
-        "time": [b["datetime"] for b in ordered],
+        "timestamp": [b["timestamp"] for b in ordered],
+        "datetime": [b["datetime"] for b in ordered],
         "gas_utilization": [b["gas_utilization"] * 100 for b in ordered],
-        "tx_count": [b["tx_count"] for b in ordered],
         "base_fee_gwei": [b["base_fee_gwei"] for b in ordered],
+        "tx_count": [b["tx_count"] for b in ordered],
     })
-    df["gas_z"] = stats.zscore(df["gas_utilization"], nan_policy="omit")
-    df["fee_z"] = stats.zscore(df["base_fee_gwei"], nan_policy="omit")
-    df["anomaly"] = df["gas_z"].abs() >= 2.0
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Blocks Analyzed", f"{len(df):,}")
-    c2.metric("Mean Gas Util.", f"{df['gas_utilization'].mean():.1f}%")
-    c3.metric("Std. Dev.", f"{df['gas_utilization'].std():.1f} pp")
-    c4.metric("Gas Anomalies", f"{int(df['anomaly'].sum())}")
+    df["hour"] = pd.to_datetime(df["timestamp"], unit="s", utc=True).dt.hour
+    df["block_time"] = df["timestamp"].diff().fillna(12)
+    return df
+
+
+def _eth_m4_detect_isolation_forest(df: pd.DataFrame, contamination: float = 0.05) -> tuple[np.ndarray, np.ndarray]:
+    """IsolationForest on multivariate gas-pressure features."""
+    from sklearn.ensemble import IsolationForest
+    X = np.column_stack([
+        df["gas_utilization"].values.astype(float),
+        np.log1p(df["base_fee_gwei"].values.astype(float)),
+        np.log1p(df["tx_count"].values.astype(float)),
+        df["hour"].values.astype(float),
+    ])
+    clf = IsolationForest(contamination=contamination, random_state=42, n_estimators=100)
+    labels = clf.fit_predict(X)
+    scores = clf.score_samples(X)
+    return labels == -1, scores
+
+
+def _eth_m4_evaluate_synthetic(df: pd.DataFrame, anomaly_fraction: float = 0.05, random_state: int = 42) -> dict:
+    """Inject controlled gas/fee anomalies and measure precision/recall/F1."""
+    from sklearn.metrics import f1_score, precision_score, recall_score
+    if df.empty:
+        return {}
+    rng = np.random.default_rng(random_state)
+    synthetic = df.copy()
+    n = len(synthetic)
+    n_anom = max(1, int(round(n * anomaly_fraction)))
+    n_anom = min(n_anom, n)
+    idx = rng.choice(n, size=n_anom, replace=False)
+    y_true = np.zeros(n, dtype=bool)
+    y_true[idx] = True
+
+    rng.shuffle(idx)
+    split = max(1, len(idx) // 2)
+    spike_idx = idx[:split]
+    quiet_idx = idx[split:]
+    gas_arr = synthetic["gas_utilization"].values.astype(float)
+    fee_arr = synthetic["base_fee_gwei"].values.astype(float)
+    gas_arr[spike_idx] = rng.uniform(95.0, 100.0, size=len(spike_idx))
+    fee_arr[spike_idx] = rng.uniform(150.0, 400.0, size=len(spike_idx))
+    if len(quiet_idx) > 0:
+        gas_arr[quiet_idx] = rng.uniform(0.0, 5.0, size=len(quiet_idx))
+        fee_arr[quiet_idx] = rng.uniform(0.05, 1.0, size=len(quiet_idx))
+    synthetic["gas_utilization"] = gas_arr
+    synthetic["base_fee_gwei"] = fee_arr
+
+    z = stats.zscore(gas_arr, nan_policy="omit")
+    z_pred = np.abs(np.nan_to_num(z, nan=0.0)) >= 2.0
+    if_pred, _ = _eth_m4_detect_isolation_forest(
+        synthetic, contamination=max(0.01, min(0.5, anomaly_fraction))
+    )
+
+    def metrics(y_pred: np.ndarray) -> dict:
+        return {
+            "precision": float(precision_score(y_true, y_pred, zero_division=0)),
+            "recall": float(recall_score(y_true, y_pred, zero_division=0)),
+            "f1": float(f1_score(y_true, y_pred, zero_division=0)),
+            "detected": int(np.sum(y_pred)),
+        }
+
+    return {
+        "n_samples": int(n),
+        "n_injected": int(n_anom),
+        "anomaly_fraction": float(anomaly_fraction),
+        "z_score": metrics(z_pred),
+        "isolation_forest": metrics(if_pred),
+    }
+
+
+def render_ethereum_m4() -> None:
+    module_header("M4 — ETHEREUM AI COMPONENT: ACTIVITY ANOMALY DETECTOR")
+
+    col_ctrl, _ = st.columns([2, 5])
+    with col_ctrl:
+        n_blocks = st.slider(
+            "Blocks to analyze",
+            min_value=60, max_value=300, value=200, step=20,
+            key="m4_eth_n_blocks",
+        )
+
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
-    col_timeline, col_dist = st.columns([3, 2], gap="medium")
-    with col_timeline:
-        st.markdown('<div class="card"><div class="card-title">Gas Utilization Anomaly Timeline</div>', unsafe_allow_html=True)
+
+    with st.spinner("Fetching Ethereum blocks via JSON-RPC batch..."):
+        try:
+            raw_blocks = load_eth_blocks_batched(n_blocks)
+        except Exception as e:
+            render_error(f"Could not fetch Ethereum block data: {e}")
+            return
+
+    if not raw_blocks or len(raw_blocks) < 20:
+        render_error("Not enough Ethereum blocks returned for analysis.")
+        return
+
+    try:
+        df = _eth_m4_build_dataframe(raw_blocks)
+        gas = df["gas_utilization"].values.astype(float)
+        fee = df["base_fee_gwei"].values.astype(float)
+        gas_z = stats.zscore(gas, nan_policy="omit")
+        gas_z = np.nan_to_num(gas_z, nan=0.0)
+        z_mask = np.abs(gas_z) >= 2.0
+        if_mask, if_scores = _eth_m4_detect_isolation_forest(df)
+        synth_eval = _eth_m4_evaluate_synthetic(df, anomaly_fraction=0.05)
+    except Exception as e:
+        render_error(f"Model error: {e}")
+        return
+
+    df = df.copy()
+    df["gas_z"] = gas_z
+    df["z_anomaly"] = z_mask
+    df["if_anomaly"] = if_mask
+    df["if_score"] = if_scores
+
+    n_samples = len(df)
+    pct_z = 100.0 * z_mask.sum() / n_samples
+    pct_if = 100.0 * if_mask.sum() / n_samples
+    mean_gas = float(np.mean(gas))
+    std_gas = float(np.std(gas))
+    mean_fee = float(np.mean(fee))
+
+    # ── Row 1: Summary metrics ────────────────────────────────────────────────
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Blocks Analyzed", f"{n_samples:,}")
+    c2.metric("Mean Gas Util.", f"{mean_gas:.1f}%")
+    c3.metric("Mean Base Fee", f"{mean_fee:.2f} gwei")
+    z_color = "#1CE87A" if pct_z <= 7 else "#F7931A"
+    with c4:
+        st.markdown(
+            custom_metric("Gas |z|≥2 Anomalies", f"{pct_z:.1f}% ({z_mask.sum()})", z_color, z_color),
+            unsafe_allow_html=True,
+        )
+    if_color = "#FF4560" if pct_if > 7 else "#00C2FF"
+    with c5:
+        st.markdown(
+            custom_metric("IF Anomalies", f"{pct_if:.1f}% ({if_mask.sum()})", if_color, if_color),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    # ── Row 2: Gas distribution + base-fee distribution ───────────────────────
+    col_gas, col_fee = st.columns([3, 2], gap="medium")
+
+    with col_gas:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Gas Utilization Distribution — z-score Baseline</div>',
+            unsafe_allow_html=True,
+        )
+        normal_gas = gas[~z_mask]
+        anom_gas = gas[z_mask]
+
         fig = go.Figure()
-        normal = df[~df["anomaly"]]
-        anomalous = df[df["anomaly"]]
-        fig.add_trace(go.Scatter(x=normal["time"], y=normal["gas_utilization"], mode="markers", marker=dict(color=active_crypto.secondary_color, size=6), name="Normal"))
-        fig.add_trace(go.Scatter(x=anomalous["time"], y=anomalous["gas_utilization"], mode="markers", marker=dict(color="#FF4560", size=10, symbol="x"), name="|z| >= 2"))
-        fig.add_hline(y=df["gas_utilization"].mean(), line_dash="dash", line_color="#6B7DA0", annotation_text="Mean")
+        fig.add_trace(go.Histogram(
+            x=normal_gas,
+            histnorm="probability density",
+            nbinsx=30,
+            name="Normal blocks",
+            marker_color=hex_to_rgba(active_crypto.primary_color, 0.67),
+            marker_line=dict(color=active_crypto.primary_color, width=0.5),
+            hovertemplate="Gas: %{x:.1f}%<br>Density: %{y:.4f}<extra></extra>",
+        ))
+        fig.add_trace(go.Histogram(
+            x=anom_gas,
+            histnorm="probability density",
+            nbinsx=30,
+            name="|z| ≥ 2 anomalies",
+            marker_color="rgba(255,69,96,0.75)",
+            marker_line=dict(color="rgba(255,69,96,0.9)", width=0.5),
+            hovertemplate="Gas: %{x:.1f}% (anomaly)<br>Density: %{y:.4f}<extra></extra>",
+        ))
+        fig.add_vline(x=mean_gas, line_dash="dash", line_color=active_crypto.secondary_color,
+                      annotation_text=f"Mean {mean_gas:.1f}%",
+                      annotation_font=dict(family="Rajdhani", color=active_crypto.secondary_color, size=11))
+        fig.add_vline(x=50, line_dash="dot", line_color="#6B7DA0",
+                      annotation_text="EIP-1559 target",
+                      annotation_font=dict(family="Rajdhani", color="#6B7DA0", size=11))
+        fig.add_vline(x=mean_gas + 2 * std_gas, line_dash="dash", line_color="#FF4560",
+                      annotation_text="+2σ", annotation_font_color="#FF4560", annotation_font_size=10)
+        fig.add_vline(x=max(0, mean_gas - 2 * std_gas), line_dash="dash", line_color="#FF4560",
+                      annotation_text="-2σ", annotation_font_color="#FF4560", annotation_font_size=10)
         apply_chart_style(fig)
-        fig.update_layout(height=340, xaxis_title="Time", yaxis_title="Gas utilization (%)")
+        fig.update_layout(
+            xaxis_title="Gas utilization (%)",
+            yaxis_title="Probability density",
+            barmode="overlay",
+            showlegend=True,
+            legend=dict(
+                x=0.97, y=0.95, xanchor="right",
+                bgcolor="rgba(15,22,41,0.85)",
+                bordercolor="#1E2D5A", borderwidth=1,
+            ),
+            height=360,
+        )
         st.plotly_chart(fig, use_container_width=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            'margin-top:0;line-height:1.55;">'
+            'Ethereum slot times are deterministic (12 s), so the Bitcoin Poisson '
+            'model does not transfer. The univariate baseline here is a z-score '
+            'on gas utilization. Under EIP-1559 the protocol pushes utilization '
+            'toward 50%; persistent deviations above +2σ signal demand spikes, '
+            'and below -2σ signal sudden drops. Red bars are blocks whose gas '
+            'utilization is more than 2 standard deviations from the recent mean.</p>',
+            unsafe_allow_html=True,
+        )
         st.markdown("</div>", unsafe_allow_html=True)
-    with col_dist:
-        st.markdown('<div class="card"><div class="card-title">Distribution And Scores</div>', unsafe_allow_html=True)
-        fig2 = go.Figure()
-        fig2.add_trace(go.Histogram(x=df["gas_utilization"], nbinsx=18, marker_color=active_crypto.primary_color, name="Gas util."))
-        fig2.add_vline(x=df["gas_utilization"].mean(), line_dash="dash", line_color=active_crypto.secondary_color, annotation_text="Mean")
-        apply_chart_style(fig2)
-        fig2.update_layout(height=260, xaxis_title="Gas utilization (%)", yaxis_title="Blocks", showlegend=False)
-        st.plotly_chart(fig2, use_container_width=True)
-        st.caption("Ethereum anomaly detection uses gas pressure z-scores. This is the PoS/EIP-1559 analogue of timing anomaly analysis.")
+
+    with col_fee:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Base Fee Distribution (log scale)</div>',
+            unsafe_allow_html=True,
+        )
+        fig_fee = go.Figure()
+        fig_fee.add_trace(go.Histogram(
+            x=fee,
+            nbinsx=30,
+            marker_color=hex_to_rgba(active_crypto.secondary_color, 0.67),
+            marker_line=dict(color=active_crypto.secondary_color, width=0.5),
+            hovertemplate="Base fee: %{x:.2f} gwei<br>Blocks: %{y}<extra></extra>",
+        ))
+        fig_fee.add_vline(x=mean_fee, line_dash="dash", line_color=active_crypto.primary_color,
+                          annotation_text=f"Mean {mean_fee:.1f} gwei",
+                          annotation_font=dict(family="Rajdhani", color=active_crypto.primary_color, size=11))
+        apply_chart_style(fig_fee)
+        fig_fee.update_layout(
+            xaxis_title="Base fee (gwei)",
+            yaxis_title="Block count",
+            yaxis_type="log",
+            showlegend=False,
+            height=360,
+        )
+        st.plotly_chart(fig_fee, use_container_width=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            'margin-top:0;line-height:1.55;">'
+            'Base fee is the EIP-1559 burn rate — adjusts ±12.5% per block based on '
+            'utilization. Heavy right tails indicate fee spikes (NFT mints, exchange '
+            'congestion, MEV bursts). Log scale exposes those outliers more clearly.</p>',
+            unsafe_allow_html=True,
+        )
         st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    # ── Row 3: IF timeline + bivariate scatter ───────────────────────────────
+    col_if, col_scatter = st.columns([3, 2], gap="medium")
+
+    with col_if:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'IsolationForest Multivariate Anomaly Timeline</div>',
+            unsafe_allow_html=True,
+        )
+        normal_df = df[~df["if_anomaly"]]
+        anom_df = df[df["if_anomaly"]]
+
+        fig_if = go.Figure()
+        fig_if.add_trace(go.Scatter(
+            x=normal_df["datetime"], y=normal_df["gas_utilization"],
+            mode="markers",
+            name="Normal",
+            marker=dict(color=hex_to_rgba(active_crypto.primary_color, 0.53), size=4),
+            hovertemplate="%{x|%Y-%m-%d %H:%M}<br>Gas: %{y:.1f}%<extra>Normal</extra>",
+        ))
+        fig_if.add_trace(go.Scatter(
+            x=anom_df["datetime"], y=anom_df["gas_utilization"],
+            mode="markers",
+            name="IF anomaly",
+            marker=dict(color="#FF4560", size=8, symbol="x"),
+            hovertemplate="%{x|%Y-%m-%d %H:%M}<br>Gas: %{y:.1f}%<extra>Anomaly</extra>",
+        ))
+        fig_if.add_hline(y=50, line_dash="dot", line_color="#6B7DA0",
+                         annotation_text="50% target",
+                         annotation_font=dict(family="Rajdhani", color="#6B7DA0", size=11))
+        apply_chart_style(fig_if)
+        fig_if.update_layout(
+            xaxis_title="Date (UTC)",
+            yaxis_title="Gas utilization (%)",
+            showlegend=True,
+            legend=dict(
+                x=0.02, y=0.96, xanchor="left",
+                bgcolor="rgba(15,22,41,0.85)",
+                bordercolor="#1E2D5A", borderwidth=1,
+            ),
+            height=320,
+        )
+        st.plotly_chart(fig_if, use_container_width=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            'margin-top:0;line-height:1.55;">'
+            'IsolationForest features: gas_utilization, log(1+base_fee), '
+            'log(1+tx_count), hour_of_day. contamination=0.05. This catches '
+            'jointly-anomalous blocks — e.g. moderate gas + extreme base fee — '
+            'that the univariate z-score on gas alone would miss.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_scatter:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Gas vs Base Fee — both detectors</div>',
+            unsafe_allow_html=True,
+        )
+        fig_sc = go.Figure()
+        fig_sc.add_trace(go.Scatter(
+            x=df["gas_utilization"], y=df["base_fee_gwei"],
+            mode="markers",
+            marker=dict(
+                size=6,
+                color=df["if_score"],
+                colorscale="Viridis",
+                showscale=True,
+                colorbar=dict(title="IF score", thickness=8, len=0.6),
+                line=dict(color="#0A0E1A", width=0.5),
+            ),
+            hovertemplate="Gas: %{x:.1f}%<br>Fee: %{y:.2f} gwei<br>IF score: %{marker.color:.3f}<extra></extra>",
+            name="Blocks",
+        ))
+        anom_both = df[df["if_anomaly"] | df["z_anomaly"]]
+        if not anom_both.empty:
+            fig_sc.add_trace(go.Scatter(
+                x=anom_both["gas_utilization"], y=anom_both["base_fee_gwei"],
+                mode="markers",
+                marker=dict(size=11, color="rgba(0,0,0,0)",
+                            line=dict(color="#FF4560", width=1.5)),
+                name="Flagged",
+                hoverinfo="skip",
+            ))
+        apply_chart_style(fig_sc)
+        fig_sc.update_layout(
+            xaxis_title="Gas utilization (%)",
+            yaxis_title="Base fee (gwei)",
+            yaxis_type="log",
+            height=320,
+            showlegend=False,
+        )
+        st.plotly_chart(fig_sc, use_container_width=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            'margin-top:0;line-height:1.55;">'
+            'Lower IF scores = more anomalous. Red rings mark blocks flagged by '
+            'either detector. The bottom-left corner (low gas, low fee) and the '
+            'top-right corner (saturated gas, expensive fee) are the natural '
+            'multivariate outlier zones.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    # ── Row 4: Method comparison + synthetic eval ────────────────────────────
+    col_compare, col_eval = st.columns([3, 2], gap="medium")
+
+    with col_compare:
+        st.markdown(
+            '<div class="card"><div class="card-title">Method Comparison</div>',
+            unsafe_allow_html=True,
+        )
+        both_mask = z_mask & if_mask
+        only_z = z_mask & ~if_mask
+        only_if = ~z_mask & if_mask
+
+        rows = [
+            ("Blocks analyzed", f"{n_samples:,}", "#E8EDF5"),
+            ("Mean gas utilization", f"{mean_gas:.2f}%", "#E8EDF5"),
+            ("Std. dev. of gas util.", f"{std_gas:.2f} pp", "#6B7DA0"),
+            ("Mean base fee", f"{mean_fee:.3f} gwei", "#E8EDF5"),
+            ("z-score anomalies", f"{z_mask.sum()} ({pct_z:.1f}%)", "#F7931A"),
+            ("IsolationForest anomalies", f"{if_mask.sum()} ({pct_if:.1f}%)", "#FF4560"),
+            ("Flagged by both", f"{both_mask.sum()}", "#00C2FF"),
+            ("Only z-score", f"{only_z.sum()}", "#6B7DA0"),
+            ("Only IsolationForest", f"{only_if.sum()}", "#6B7DA0"),
+        ]
+        if synth_eval:
+            rows.extend([
+                ("Synthetic labels injected", f"{synth_eval['n_injected']}", "#E8EDF5"),
+                ("z-score F1", f"{synth_eval['z_score']['f1']:.3f}", "#F7931A"),
+                ("IsolationForest F1", f"{synth_eval['isolation_forest']['f1']:.3f}", "#FF4560"),
+            ])
+        table_rows = "".join(
+            f'<tr onmouseover="this.style.background=\'rgba(0,194,255,0.04)\'"'
+            f' onmouseout="this.style.background=\'transparent\'">'
+            f'<td style="padding:7px 10px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-size:0.82rem;color:#6B7DA0;">{lbl}</td>'
+            f'<td style="padding:7px 10px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-size:0.9rem;font-weight:700;'
+            f'color:{col};text-align:right;">{val}</td>'
+            f'</tr>'
+            for lbl, val, col in rows
+        )
+        st.markdown(
+            f'<table style="width:100%;border-collapse:collapse;">'
+            f'<tbody>{table_rows}</tbody></table>',
+            unsafe_allow_html=True,
+        )
+        st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.77rem;color:#6B7DA0;'
+            'line-height:1.6;">'
+            '<strong style="color:#E8EDF5;">z-score baseline</strong> — '
+            'univariate, interpretable, captures gas-pressure spikes only.<br>'
+            '<strong style="color:#E8EDF5;">IsolationForest</strong> — '
+            'multivariate, captures joint anomalies (gas, fee, tx-count, hour). '
+            'Better at MEV bursts and demand-fee divergences.<br>'
+            '<strong style="color:#E8EDF5;">Why no exponential fit?</strong> '
+            'Ethereum slot times are deterministic 12s, so the Bitcoin Poisson '
+            'model does not apply. Activity anomalies replace timing anomalies.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_eval:
+        st.markdown(
+            '<div class="card"><div class="card-title">Synthetic Anomaly Evaluation</div>',
+            unsafe_allow_html=True,
+        )
+        if synth_eval:
+            z_eval = synth_eval["z_score"]
+            if_eval = synth_eval["isolation_forest"]
+            ec1, ec2 = st.columns(2)
+            ec1.metric("Injected", f"{synth_eval['n_injected']}")
+            ec2.metric("Anomaly fraction", f"{synth_eval['anomaly_fraction']*100:.0f}%")
+            st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+            ec3, ec4, ec5 = st.columns(3)
+            ec3.metric("z Precision", f"{z_eval['precision']:.3f}")
+            ec4.metric("z Recall", f"{z_eval['recall']:.3f}")
+            ec5.metric("z F1", f"{z_eval['f1']:.3f}")
+            ec6, ec7, ec8 = st.columns(3)
+            ec6.metric("IF Precision", f"{if_eval['precision']:.3f}")
+            ec7.metric("IF Recall", f"{if_eval['recall']:.3f}")
+            ec8.metric("IF F1", f"{if_eval['f1']:.3f}")
+            st.markdown(
+                '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+                'margin-top:10px;line-height:1.55;">'
+                'Half of the injected blocks become saturated demand spikes '
+                '(gas≈100%, fee 150–400 gwei) and half become quiet outliers '
+                '(gas&lt;5%, fee&lt;1 gwei). This mimics the two real-world '
+                'failure modes of EIP-1559 networks.</p>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<p style="color:#6B7DA0;">Not enough samples for synthetic evaluation.</p>',
+                unsafe_allow_html=True,
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    # ── Row 5: Top anomalies table ────────────────────────────────────────────
+    st.markdown(
+        '<div class="card"><div class="card-title">'
+        'Top Anomalous Ethereum Blocks (by IF score)</div>',
+        unsafe_allow_html=True,
+    )
+    top_df = (
+        df[df["z_anomaly"] | df["if_anomaly"]]
+        .sort_values("if_score", ascending=True)
+        .head(15)
+    )
+    if top_df.empty:
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.85rem;color:#6B7DA0;">'
+            'No anomalies detected in this window.</p>',
+            unsafe_allow_html=True,
+        )
+    else:
+        th_s = (
+            "padding:7px 12px;text-align:left;font-family:Rajdhani,sans-serif;"
+            "font-size:0.72rem;color:#6B7DA0;text-transform:uppercase;"
+            "letter-spacing:0.08em;border-bottom:2px solid #1E2D5A;"
+        )
+        thead = (
+            "<thead><tr>"
+            + "".join(
+                f'<th style="{th_s}">{h}</th>'
+                for h in ["Block", "Date (UTC)", "Gas %", "Base fee", "Tx count", "IF score", "z", "IF"]
+            )
+            + "</tr></thead>"
+        )
+        body = []
+        for _, row in top_df.iterrows():
+            dt_str = pd.Timestamp(row["datetime"]).strftime("%Y-%m-%d %H:%M")
+            z_v = '<span style="color:#FF4560;">YES</span>' if row["z_anomaly"] else '<span style="color:#6B7DA0;">—</span>'
+            if_v = '<span style="color:#FF4560;">YES</span>' if row["if_anomaly"] else '<span style="color:#6B7DA0;">—</span>'
+            body.append(
+                '<tr onmouseover="this.style.background=\'rgba(0,194,255,0.04)\'"'
+                ' onmouseout="this.style.background=\'transparent\'">'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:Rajdhani,sans-serif;font-weight:600;color:#E8EDF5;">{int(row["number"]):,}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:Rajdhani,sans-serif;color:#6B7DA0;">{dt_str}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:\'Share Tech Mono\',monospace;color:{active_crypto.primary_color};">{row["gas_utilization"]:.1f}%</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:\'Share Tech Mono\',monospace;color:{active_crypto.secondary_color};">{row["base_fee_gwei"]:.2f}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:Rajdhani,sans-serif;color:#E8EDF5;">{int(row["tx_count"]):,}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:\'Share Tech Mono\',monospace;color:#FF4560;">{row["if_score"]:.3f}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;text-align:center;">{z_v}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;text-align:center;">{if_v}</td>'
+                "</tr>"
+            )
+        st.markdown(
+            f'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;">'
+            f'{thead}<tbody>{"".join(body)}</tbody></table></div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_litecoin_m4() -> None:
-    module_header("M4 — LITECOIN INTER-ARRIVAL ANOMALY DETECTOR")
-    try:
-        blocks = load_ltc_recent_blocks(20)
-    except Exception as e:
-        render_error(f"Could not fetch Litecoin timing data: {e}")
-        return
-    df = build_inter_arrival_df(blocks)
-    if df.empty:
-        render_error("Not enough Litecoin intervals for anomaly detection.")
-        return
-    times = df["inter_arrival"].values.astype(float)
-    lam = 1 / float(times.mean())
-    mask = detect_statistical(times, lam)
-    df["anomaly"] = mask
-    df["datetime"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Intervals", f"{len(df):,}")
-    c2.metric("Mean", f"{times.mean():.0f} s")
-    c3.metric("Target", "150 s")
-    c4.metric("Anomalies", f"{int(mask.sum())}")
+    module_header("M4 — LITECOIN AI COMPONENT: ANOMALY DETECTOR")
+
+    LTC_TARGET = 150  # Litecoin target block time in seconds
+
+    col_ctrl, _ = st.columns([2, 5])
+    with col_ctrl:
+        n_blocks = st.slider(
+            "Blocks to analyze",
+            min_value=100, max_value=300, value=200, step=20,
+            key="m4_ltc_n_blocks",
+        )
+
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
-    col_timeline, col_hist = st.columns([3, 2], gap="medium")
-    with col_timeline:
-        st.markdown('<div class="card"><div class="card-title">Litecoin Timing Outliers</div>', unsafe_allow_html=True)
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df[~mask]["datetime"], y=df[~mask]["inter_arrival"], mode="markers+lines", marker=dict(color=active_crypto.secondary_color, size=6), line=dict(color=active_crypto.secondary_color, width=1), name="Normal"))
-        fig.add_trace(go.Scatter(x=df[mask]["datetime"], y=df[mask]["inter_arrival"], mode="markers", marker=dict(color="#FF4560", size=10, symbol="x"), name="Anomaly"))
-        fig.add_hline(y=150, line_dash="dash", line_color=active_crypto.primary_color, annotation_text="150s target")
-        apply_chart_style(fig)
-        fig.update_layout(height=340, xaxis_title="Time", yaxis_title="Seconds")
-        st.plotly_chart(fig, use_container_width=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+
+    with st.spinner("Fetching Litecoin blocks from Blockchair..."):
+        try:
+            raw_blocks = load_ltc_blocks_paginated(n_blocks)
+        except Exception as e:
+            render_error(f"Could not fetch Litecoin block data: {e}")
+            return
+
+    if not raw_blocks:
+        render_error("No Litecoin block data returned from API.")
+        return
+
+    try:
+        df = build_inter_arrival_df(raw_blocks)
+        times = df["inter_arrival"].values.astype(float)
+        if len(times) < 20:
+            render_error("Not enough inter-arrival samples for analysis.")
+            return
+
+        exp_fit = fit_exponential(times)
+        stat_mask = detect_statistical(times, exp_fit["lambda_hat"])
+        if_mask, if_scores = detect_isolation_forest(df)
+        synth_eval = evaluate_synthetic_anomalies(df, anomaly_fraction=0.05)
+    except Exception as e:
+        render_error(f"Model error: {e}")
+        return
+
+    df = df.copy()
+    df["stat_anomaly"] = stat_mask
+    df["if_anomaly"] = if_mask
+    df["if_score"] = if_scores
+    df["datetime"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
+
+    n_samples = len(df)
+    pct_stat = 100.0 * stat_mask.sum() / n_samples
+    pct_if = 100.0 * if_mask.sum() / n_samples
+    ks_pval = exp_fit["ks_pvalue"]
+    mean_s = exp_fit["mean_s"]
+
+    # ── Row 1: Summary metrics ────────────────────────────────────────────────
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Blocks Analyzed", f"{n_samples:,}")
+    c2.metric("Mean Inter-arrival", f"{mean_s:.0f} s")
+    c3.metric("Target (Poisson)", f"{LTC_TARGET} s")
+
+    ks_color = "#1CE87A" if ks_pval >= 0.05 else "#FF4560"
+    with c4:
+        st.markdown(
+            custom_metric("KS Test p-value", f"p = {ks_pval:.4f}", ks_color, ks_color),
+            unsafe_allow_html=True,
+        )
+
+    stat_color = "#F7931A" if pct_stat > 7 else "#1CE87A"
+    with c5:
+        st.markdown(
+            custom_metric(
+                "Stat. Anomalies",
+                f"{pct_stat:.1f}% ({stat_mask.sum()})",
+                stat_color, stat_color,
+            ),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    # ── Row 2: Histogram + QQ-plot ────────────────────────────────────────────
+    col_hist, col_qq = st.columns([3, 2], gap="medium")
+
     with col_hist:
-        st.markdown('<div class="card"><div class="card-title">Inter-Arrival Distribution</div>', unsafe_allow_html=True)
-        fig2 = go.Figure()
-        fig2.add_trace(go.Histogram(x=times, nbinsx=12, marker_color=active_crypto.primary_color))
-        fig2.add_vline(x=150, line_dash="dash", line_color=active_crypto.secondary_color, annotation_text="150s")
-        apply_chart_style(fig2)
-        fig2.update_layout(height=260, xaxis_title="Seconds", yaxis_title="Count", showlegend=False)
-        st.plotly_chart(fig2, use_container_width=True)
-        st.caption("Same anomaly idea as Bitcoin, but with Litecoin's 150-second target and recent Scrypt PoW blocks.")
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Inter-Arrival Time Distribution — Fitted Exponential Baseline</div>',
+            unsafe_allow_html=True,
+        )
+        lam_hat = exp_fit["lambda_hat"]
+        x_max = max(float(np.percentile(times, 99)) * 1.2, LTC_TARGET * 4)
+        x_curve = np.linspace(0, x_max, 600)
+        y_curve = lam_hat * np.exp(-lam_hat * x_curve)
+
+        normal_times = times[~stat_mask]
+        anomaly_times = times[stat_mask]
+
+        fig = go.Figure()
+        fig.add_trace(go.Histogram(
+            x=normal_times,
+            histnorm="probability density",
+            nbinsx=30,
+            name="Normal blocks",
+            marker_color=hex_to_rgba(active_crypto.primary_color, 0.67),
+            marker_line=dict(color=active_crypto.primary_color, width=0.5),
+            hovertemplate="Interval: %{x:.0f}s<br>Density: %{y:.6f}<extra></extra>",
+        ))
+        fig.add_trace(go.Histogram(
+            x=anomaly_times,
+            histnorm="probability density",
+            nbinsx=30,
+            name="Stat. anomalies",
+            marker_color="rgba(255,69,96,0.75)",
+            marker_line=dict(color="rgba(255,69,96,0.9)", width=0.5),
+            hovertemplate="Interval: %{x:.0f}s (anomaly)<br>Density: %{y:.6f}<extra></extra>",
+        ))
+        fig.add_trace(go.Scatter(
+            x=x_curve, y=y_curve,
+            mode="lines",
+            name="Fitted Exp(λ̂)",
+            line=dict(color=active_crypto.secondary_color, width=2.5),
+            hovertemplate="t=%{x:.0f}s<br>PDF=%{y:.7f}<extra></extra>",
+        ))
+
+        low_bound = stats.expon.ppf(0.025, scale=1 / lam_hat)
+        high_bound = stats.expon.ppf(0.975, scale=1 / lam_hat)
+        fig.add_vline(x=low_bound, line_dash="dash", line_color="#FF4560",
+                      annotation_text="2.5%", annotation_font_color="#FF4560",
+                      annotation_font_size=10)
+        fig.add_vline(x=high_bound, line_dash="dash", line_color="#FF4560",
+                      annotation_text="97.5%", annotation_font_color="#FF4560",
+                      annotation_font_size=10)
+        fig.add_annotation(
+            text=f"Observed mean: {mean_s:.0f}s",
+            xref="paper", yref="paper", x=0.97, y=0.95, showarrow=False,
+            bgcolor="#141C35", bordercolor="#1CE87A", borderwidth=1, borderpad=6,
+            font=dict(family="Rajdhani", size=12, color="#1CE87A"), align="right",
+        )
+        fig.add_annotation(
+            text=f"KS p-value: {ks_pval:.4f} {'(fit OK)' if ks_pval >= 0.05 else '(poor fit)'}",
+            xref="paper", yref="paper", x=0.97, y=0.84, showarrow=False,
+            bgcolor="#141C35", bordercolor="#6B7DA0", borderwidth=1, borderpad=6,
+            font=dict(family="Rajdhani", size=11, color="#6B7DA0"), align="right",
+        )
+        apply_chart_style(fig)
+        fig.update_layout(
+            xaxis_title="Seconds between consecutive blocks",
+            yaxis_title="Probability density",
+            barmode="overlay",
+            showlegend=True,
+            legend=dict(
+                x=0.97, y=0.72, xanchor="right",
+                bgcolor="rgba(15,22,41,0.85)",
+                bordercolor="#1E2D5A", borderwidth=1,
+            ),
+            height=360,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            'margin-top:0;line-height:1.55;">'
+            'Litecoin mining inherits the Poisson model from Bitcoin: inter-arrival '
+            'times should be exponential with target mean 150s. λ is fitted via MLE '
+            'on the most recent blocks. Bars in red are blocks outside the 2.5–97.5% '
+            'fitted-exponential band. Even with Scrypt mining hardware, the timing '
+            'process is the same Poisson process — only the hash function changes.</p>',
+            unsafe_allow_html=True,
+        )
         st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_qq:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'QQ-Plot — Empirical vs Exp(λ̂)</div>',
+            unsafe_allow_html=True,
+        )
+        sorted_times = np.sort(times)
+        n = len(sorted_times)
+        probs = (np.arange(1, n + 1) - 0.5) / n
+        theoretical_q = stats.expon.ppf(probs, scale=1.0 / lam_hat)
+        qq_max = float(max(sorted_times.max(), theoretical_q.max())) * 1.05
+
+        fig_qq = go.Figure()
+        fig_qq.add_trace(go.Scatter(
+            x=theoretical_q, y=sorted_times,
+            mode="markers",
+            name="Data quantiles",
+            marker=dict(color=active_crypto.primary_color, size=4, opacity=0.7),
+            hovertemplate="Theoretical: %{x:.0f}s<br>Observed: %{y:.0f}s<extra></extra>",
+        ))
+        fig_qq.add_trace(go.Scatter(
+            x=[0, qq_max], y=[0, qq_max],
+            mode="lines",
+            name="Perfect fit (y=x)",
+            line=dict(color=active_crypto.secondary_color, width=1.5, dash="dash"),
+        ))
+        apply_chart_style(fig_qq)
+        fig_qq.update_layout(
+            xaxis_title="Theoretical quantiles (s)",
+            yaxis_title="Observed quantiles (s)",
+            showlegend=True,
+            legend=dict(
+                x=0.05, y=0.95, xanchor="left",
+                bgcolor="rgba(15,22,41,0.85)",
+                bordercolor="#1E2D5A", borderwidth=1,
+            ),
+            height=360,
+        )
+        st.plotly_chart(fig_qq, use_container_width=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            'margin-top:0;line-height:1.55;">'
+            'A clean diagonal means the empirical distribution matches Exp(λ̂). '
+            'Upper-tail deviations point to longer-than-expected blocks — '
+            'a typical signature of network or pool perturbations.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    # ── Row 3: IsolationForest timeline + method comparison ───────────────────
+    col_if, col_compare = st.columns([3, 2], gap="medium")
+
+    with col_if:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'IsolationForest Anomaly Score Timeline</div>',
+            unsafe_allow_html=True,
+        )
+        normal_df = df[~df["if_anomaly"]]
+        anomaly_df = df[df["if_anomaly"]]
+
+        fig_if = go.Figure()
+        fig_if.add_trace(go.Scatter(
+            x=normal_df["datetime"], y=normal_df["inter_arrival"],
+            mode="markers",
+            name="Normal",
+            marker=dict(color=hex_to_rgba(active_crypto.primary_color, 0.53), size=4),
+            hovertemplate="%{x|%Y-%m-%d %H:%M}<br>%{y:.0f}s<extra>Normal</extra>",
+        ))
+        fig_if.add_trace(go.Scatter(
+            x=anomaly_df["datetime"], y=anomaly_df["inter_arrival"],
+            mode="markers",
+            name="IF anomaly",
+            marker=dict(color="#FF4560", size=7, symbol="x"),
+            hovertemplate="%{x|%Y-%m-%d %H:%M}<br>%{y:.0f}s<extra>Anomaly</extra>",
+        ))
+        fig_if.add_hline(
+            y=LTC_TARGET, line_dash="dash", line_color=active_crypto.secondary_color,
+            annotation_text=f"{LTC_TARGET}s target",
+            annotation_font=dict(family="Rajdhani", color=active_crypto.secondary_color, size=11),
+            annotation_position="top right",
+        )
+        apply_chart_style(fig_if)
+        fig_if.update_layout(
+            xaxis_title="Date (UTC)",
+            yaxis_title="Inter-arrival time (s)",
+            showlegend=True,
+            legend=dict(
+                x=0.02, y=0.96, xanchor="left",
+                bgcolor="rgba(15,22,41,0.85)",
+                bordercolor="#1E2D5A", borderwidth=1,
+            ),
+            height=320,
+        )
+        st.plotly_chart(fig_if, use_container_width=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            'margin-top:0;line-height:1.55;">'
+            'IsolationForest features: log(inter_arrival), hour_of_day (UTC), and '
+            'position within the 2016-block difficulty epoch. contamination=0.05 '
+            'targets ~5% anomaly rate. This catches multivariate patterns that '
+            'a univariate quantile threshold misses — e.g. consistent slow blocks '
+            'at specific epoch positions.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_compare:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Method Comparison</div>',
+            unsafe_allow_html=True,
+        )
+        both_mask = stat_mask & if_mask
+        only_stat = stat_mask & ~if_mask
+        only_if = ~stat_mask & if_mask
+
+        rows = [
+            ("Blocks analyzed", f"{n_samples:,}", "#E8EDF5"),
+            ("Mean inter-arrival", f"{mean_s:.0f} s", "#E8EDF5"),
+            ("Exp fit — KS statistic", f"{exp_fit['ks_stat']:.4f}", "#6B7DA0"),
+            ("Exp fit — KS p-value", f"{ks_pval:.4f}",
+             "#1CE87A" if ks_pval >= 0.05 else "#FF4560"),
+            ("Statistical anomalies",
+             f"{stat_mask.sum()} ({pct_stat:.1f}%)", "#F7931A"),
+            ("IsolationForest anomalies",
+             f"{if_mask.sum()} ({pct_if:.1f}%)", "#FF4560"),
+            ("Flagged by both methods", f"{both_mask.sum()}", "#00C2FF"),
+            ("Only statistical", f"{only_stat.sum()}", "#6B7DA0"),
+            ("Only IsolationForest", f"{only_if.sum()}", "#6B7DA0"),
+        ]
+        if synth_eval:
+            rows.extend([
+                ("Synthetic labels injected", f"{synth_eval['n_injected']}", "#E8EDF5"),
+                ("Statistical F1", f"{synth_eval['statistical']['f1']:.3f}", "#F7931A"),
+                ("IsolationForest F1", f"{synth_eval['isolation_forest']['f1']:.3f}", "#FF4560"),
+            ])
+        table_rows = "".join(
+            f'<tr onmouseover="this.style.background=\'rgba(0,194,255,0.04)\'"'
+            f' onmouseout="this.style.background=\'transparent\'">'
+            f'<td style="padding:7px 10px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-size:0.82rem;color:#6B7DA0;">{lbl}</td>'
+            f'<td style="padding:7px 10px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-size:0.9rem;font-weight:700;'
+            f'color:{col};text-align:right;">{val}</td>'
+            f'</tr>'
+            for lbl, val, col in rows
+        )
+        st.markdown(
+            f'<table style="width:100%;border-collapse:collapse;">'
+            f'<tbody>{table_rows}</tbody></table>',
+            unsafe_allow_html=True,
+        )
+        st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.77rem;color:#6B7DA0;'
+            'line-height:1.6;">'
+            '<strong style="color:#E8EDF5;">Statistical</strong> — '
+            'interpretable, grounded in the same Poisson model used for Bitcoin, '
+            'with λ refit on Litecoin data.<br>'
+            '<strong style="color:#E8EDF5;">IsolationForest</strong> — '
+            'multivariate, captures joint anomalies across timing, epoch position '
+            'and hour of day.<br>'
+            '<strong style="color:#E8EDF5;">Evaluation</strong> — '
+            'controlled fast/slow anomalies are injected into real Litecoin '
+            'inter-arrivals to obtain precision/recall/F1 without faked labels.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    if synth_eval:
+        st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Synthetic Anomaly Evaluation — Precision / Recall / F1</div>',
+            unsafe_allow_html=True,
+        )
+        sc1, sc2, sc3, sc4, sc5, sc6, sc7 = st.columns(7)
+        stat_eval = synth_eval["statistical"]
+        if_eval = synth_eval["isolation_forest"]
+        sc1.metric("Injected Labels", f"{synth_eval['n_injected']}")
+        sc2.metric("Stat Precision", f"{stat_eval['precision']:.3f}")
+        sc3.metric("Stat Recall", f"{stat_eval['recall']:.3f}")
+        sc4.metric("Stat F1", f"{stat_eval['f1']:.3f}")
+        sc5.metric("IF Precision", f"{if_eval['precision']:.3f}")
+        sc6.metric("IF Recall", f"{if_eval['recall']:.3f}")
+        sc7.metric("IF F1", f"{if_eval['f1']:.3f}")
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            'margin-top:10px;line-height:1.55;">'
+            'Same evaluation protocol as M4 Bitcoin: 5% of real Litecoin intervals '
+            'are replaced with extreme fast/slow values. This is the only honest way '
+            'to obtain labelled metrics, since real chains do not ship anomaly labels.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    # ── Row 4: Top anomalies table ────────────────────────────────────────────
+    st.markdown(
+        '<div class="card"><div class="card-title">'
+        'Top Anomalous Litecoin Blocks (by inter-arrival deviation)</div>',
+        unsafe_allow_html=True,
+    )
+    top_df = (
+        df[df["stat_anomaly"] | df["if_anomaly"]]
+        .assign(abs_dev=lambda d: (d["inter_arrival"] - LTC_TARGET).abs())
+        .sort_values("abs_dev", ascending=False)
+        .head(15)
+    )
+
+    if top_df.empty:
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.85rem;color:#6B7DA0;">'
+            'No anomalies detected in this dataset.</p>',
+            unsafe_allow_html=True,
+        )
+    else:
+        th_s = (
+            "padding:7px 12px;text-align:left;font-family:Rajdhani,sans-serif;"
+            "font-size:0.72rem;color:#6B7DA0;text-transform:uppercase;"
+            "letter-spacing:0.08em;border-bottom:2px solid #1E2D5A;"
+        )
+        thead = (
+            "<thead><tr>"
+            + "".join(
+                f'<th style="{th_s}">{h}</th>'
+                for h in ["Height", "Date (UTC)", "Inter-arrival (s)",
+                          f"Dev. from {LTC_TARGET}s", "Stat.", "IF"]
+            )
+            + "</tr></thead>"
+        )
+        tbody_rows = []
+        for _, row in top_df.iterrows():
+            dt_str = pd.Timestamp(row["datetime"]).strftime("%Y-%m-%d %H:%M")
+            iat = int(row["inter_arrival"])
+            dev = iat - LTC_TARGET
+            dev_col = "#FF4560" if dev > 0 else "#1CE87A"
+            stat_v = '<span style="color:#FF4560;">YES</span>' if row["stat_anomaly"] else '<span style="color:#6B7DA0;">—</span>'
+            if_v = '<span style="color:#FF4560;">YES</span>' if row["if_anomaly"] else '<span style="color:#6B7DA0;">—</span>'
+            tbody_rows.append(
+                '<tr onmouseover="this.style.background=\'rgba(0,194,255,0.04)\'"'
+                ' onmouseout="this.style.background=\'transparent\'">'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:Rajdhani,sans-serif;font-weight:600;color:#E8EDF5;">'
+                f'{int(row["height"]):,}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:Rajdhani,sans-serif;color:#6B7DA0;">{dt_str}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:\'Share Tech Mono\',monospace;color:{active_crypto.primary_color};">{iat:,}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'font-family:Rajdhani,sans-serif;color:{dev_col};font-weight:700;">'
+                f'{dev:+,}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'text-align:center;">{stat_v}</td>'
+                f'<td style="padding:7px 12px;border-bottom:1px solid #1E2D5A;'
+                f'text-align:center;">{if_v}</td>'
+                "</tr>"
+            )
+        st.markdown(
+            f'<div style="overflow-x:auto;">'
+            f'<table style="width:100%;border-collapse:collapse;">'
+            f'{thead}<tbody>{"".join(tbody_rows)}</tbody>'
+            f'</table></div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_ethereum_m5() -> None:
     module_header("M5 — ETHEREUM STATE COMMITMENTS")
-    render_ethereum_m2()
+
+    try:
+        latest = load_eth_recent_blocks(1)[0]
+    except Exception as e:
+        render_error(f"Could not fetch Ethereum block data: {e}")
+        return
+
+    state_root = latest.get("state_root", "")
+    tx_root = latest.get("transactions_root", "")
+    receipts_root = latest.get("receipts_root", "")
+    block_hash = latest.get("hash", "")
+    parent_hash = latest.get("parent_hash", "")
+
+    # ── Row 1: Top metrics ────────────────────────────────────────────────────
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Block Number", f"{latest['number']:,}")
+    c2.metric("Transactions", f"{latest['tx_count']:,}")
+    c3.metric("Gas Used", f"{latest['gas_used']:,}")
+    c4.metric("Validator", latest.get("validator", "")[:10] + "..." if latest.get("validator") else "—")
+    with c5:
+        st.markdown(
+            custom_metric("Tree Type", "MERKLE-PATRICIA", active_crypto.primary_color, active_crypto.primary_color),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    # ── Row 2: The three roots ────────────────────────────────────────────────
+    col_roots, col_compare = st.columns([3, 2], gap="medium")
+
+    with col_roots:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Three Authenticated Trie Roots in the Block Header</div>',
+            unsafe_allow_html=True,
+        )
+
+        ROOT_COLORS = {
+            "state": "#1CE87A",
+            "tx": "#00C2FF",
+            "receipts": "#F7931A",
+        }
+
+        st.markdown(
+            f'<div style="margin-bottom:14px;">'
+            f'<p class="field-label" style="color:{ROOT_COLORS["state"]};">'
+            f'stateRoot &mdash; account &amp; storage trie</p>'
+            f'<p class="field-val" style="color:{ROOT_COLORS["state"]};border-color:{ROOT_COLORS["state"]}55;">'
+            f'{state_root}</p>'
+            f'<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            f'margin-top:6px;line-height:1.55;">'
+            f'Commits to every account balance, nonce, code hash and storage slot. '
+            f'A light client can verify any account balance with a Merkle-Patricia '
+            f'proof against this single hash.</p>'
+            f'</div>'
+
+            f'<div style="margin-bottom:14px;">'
+            f'<p class="field-label" style="color:{ROOT_COLORS["tx"]};">'
+            f'transactionsRoot &mdash; per-block tx trie</p>'
+            f'<p class="field-val" style="color:{ROOT_COLORS["tx"]};border-color:{ROOT_COLORS["tx"]}55;">'
+            f'{tx_root}</p>'
+            f'<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            f'margin-top:6px;line-height:1.55;">'
+            f'The Ethereum analogue of Bitcoin\'s merkleRoot. Difference: it is '
+            f'a Merkle-Patricia trie keyed by RLP(index), not a balanced binary '
+            f'Merkle tree of double-SHA256 hashes.</p>'
+            f'</div>'
+
+            f'<div>'
+            f'<p class="field-label" style="color:{ROOT_COLORS["receipts"]};">'
+            f'receiptsRoot &mdash; execution-result trie</p>'
+            f'<p class="field-val" style="color:{ROOT_COLORS["receipts"]};border-color:{ROOT_COLORS["receipts"]}55;">'
+            f'{receipts_root}</p>'
+            f'<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            f'margin-top:6px;line-height:1.55;">'
+            f'Commits to every transaction receipt: status, cumulative gas used, '
+            f'logs Bloom and emitted events. Lets a light client prove that a '
+            f'specific event was emitted in this block.</p>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_compare:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Bitcoin Merkle vs Ethereum Merkle-Patricia</div>',
+            unsafe_allow_html=True,
+        )
+        rows = [
+            ("Hash function", "SHA256(SHA256(·))", "keccak256"),
+            ("Tree topology", "Balanced binary", "Radix-16 + extension nodes"),
+            ("Leaf encoding", "Raw txid (LE bytes)", "RLP-encoded value"),
+            ("Key", "Implicit position", "RLP(tx index) / address"),
+            ("Odd-leaf rule", "Duplicate last hash", "Branch nodes absorb gaps"),
+            ("Proof size", "O(log n) hashes", "O(log_16 n) nodes"),
+            ("Roots per block", "1 (merkleRoot)", "3 (state, tx, receipts)"),
+        ]
+        th_s = (
+            "padding:6px 8px;text-align:left;font-family:Rajdhani,sans-serif;"
+            "font-size:0.7rem;color:#6B7DA0;text-transform:uppercase;"
+            "letter-spacing:0.08em;border-bottom:2px solid #1E2D5A;"
+        )
+        thead = (
+            "<thead><tr>"
+            f'<th style="{th_s}">Property</th>'
+            f'<th style="{th_s}">Bitcoin</th>'
+            f'<th style="{th_s}">Ethereum</th>'
+            "</tr></thead>"
+        )
+        tbody = "".join(
+            f'<tr onmouseover="this.style.background=\'rgba(0,194,255,0.04)\'"'
+            f' onmouseout="this.style.background=\'transparent\'">'
+            f'<td style="padding:6px 8px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-size:0.78rem;color:#6B7DA0;">{p}</td>'
+            f'<td style="padding:6px 8px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:\'Share Tech Mono\',monospace;font-size:0.74rem;color:#F7931A;">{b}</td>'
+            f'<td style="padding:6px 8px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:\'Share Tech Mono\',monospace;font-size:0.74rem;'
+            f'color:{active_crypto.primary_color};">{e}</td>'
+            f'</tr>'
+            for p, b, e in rows
+        )
+        st.markdown(
+            f'<table style="width:100%;border-collapse:collapse;">'
+            f'{thead}<tbody>{tbody}</tbody></table>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+            'margin-top:12px;line-height:1.55;">'
+            'Bitcoin commits to <em>one</em> set: transactions in this block. '
+            'Ethereum commits to <em>three</em> sets: world state, transactions '
+            'and receipts. That is what makes Ethereum stateful — the chain '
+            'authenticates not just "what happened" but "what is true now".</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    # ── Row 3: Trie diagram (illustrative) ────────────────────────────────────
+    st.markdown(
+        '<div class="card"><div class="card-title">'
+        'Illustrative Merkle-Patricia Path — RLP(tx index) → leaf</div>',
+        unsafe_allow_html=True,
+    )
+
+    def short(h: str) -> str:
+        return h[:14] + "..." + h[-8:] if h and len(h) > 24 else (h or "—")
+
+    fig_trie = go.Figure()
+    nodes = [
+        (0.0, 3.0, "ROOT (txRoot)\n" + short(tx_root), active_crypto.primary_color, "square"),
+        (-1.0, 2.0, "Branch [0..f]\n(16 children)", active_crypto.secondary_color, "diamond"),
+        (1.0, 2.0, "Branch [0..f]", "#6B7DA0", "diamond"),
+        (-1.5, 1.0, "Extension\nshared nibbles", "#1CE87A", "circle"),
+        (-0.5, 1.0, "Branch", active_crypto.secondary_color, "diamond"),
+        (1.0, 1.0, "Leaf\nRLP(tx)", "#F7931A", "square"),
+        (-1.5, 0.0, "Leaf\nRLP(tx)", "#F7931A", "square"),
+        (-0.5, 0.0, "Leaf\nRLP(tx)", "#F7931A", "square"),
+    ]
+    edges = [
+        (0.0, 3.0, -1.0, 2.0),
+        (0.0, 3.0, 1.0, 2.0),
+        (-1.0, 2.0, -1.5, 1.0),
+        (-1.0, 2.0, -0.5, 1.0),
+        (1.0, 2.0, 1.0, 1.0),
+        (-1.5, 1.0, -1.5, 0.0),
+        (-0.5, 1.0, -0.5, 0.0),
+    ]
+    edge_x: list = []
+    edge_y: list = []
+    for x0, y0, x1, y1 in edges:
+        edge_x.extend([x0, x1, None])
+        edge_y.extend([y0, y1, None])
+    fig_trie.add_trace(go.Scatter(
+        x=edge_x, y=edge_y, mode="lines",
+        line=dict(color="rgba(107,125,160,0.55)", width=1.5),
+        hoverinfo="skip", showlegend=False,
+    ))
+    fig_trie.add_trace(go.Scatter(
+        x=[n[0] for n in nodes],
+        y=[n[1] for n in nodes],
+        mode="markers+text",
+        marker=dict(
+            size=18,
+            color=[n[3] for n in nodes],
+            symbol=[n[4] for n in nodes],
+            line=dict(color="#0A0E1A", width=2),
+        ),
+        text=[n[2] for n in nodes],
+        textposition="middle right",
+        textfont=dict(family="Share Tech Mono", size=10, color="#E8EDF5"),
+        hoverinfo="text",
+        showlegend=False,
+    ))
+    apply_chart_style(fig_trie)
+    fig_trie.update_layout(
+        height=380,
+        xaxis=dict(visible=False, range=[-2.6, 2.6]),
+        yaxis=dict(visible=False, range=[-0.5, 3.6]),
+        margin=dict(t=20, b=20, l=20, r=20),
+    )
+    st.plotly_chart(fig_trie, use_container_width=True)
+    st.markdown(
+        '<p style="font-family:Inter,sans-serif;font-size:0.78rem;color:#6B7DA0;'
+        'margin-top:0;line-height:1.55;">'
+        'Schematic only — node positions are not derived from this block, since '
+        '<code>eth_getProof</code> for transaction inclusion is not exposed by '
+        'public RPC nodes without an archive. The shapes correspond to the three '
+        'Merkle-Patricia node kinds: <strong style="color:#F7931A;">leaf</strong>, '
+        '<strong style="color:#1CE87A;">extension</strong>, '
+        '<strong style="color:' + active_crypto.secondary_color + ';">branch</strong>. '
+        'A real proof is a list of those nodes from the queried key down to the '
+        'leaf, plus the keccak256 of each, ending at the txRoot above.</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    # ── Row 4: Block linkage card ─────────────────────────────────────────────
+    st.markdown(
+        '<div class="card"><div class="card-title">'
+        'Block Linkage — Why Tampering Cascades</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<p class="field-label">Block hash (keccak256 of header RLP)</p>'
+        f'<p class="field-val">{block_hash}</p>'
+        f'<p class="field-label">Parent hash</p>'
+        f'<p class="field-val">{parent_hash}</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<p style="font-family:Inter,sans-serif;font-size:0.82rem;color:#6B7DA0;'
+        'line-height:1.65;margin-top:10px;">'
+        'The block hash is keccak256 of the RLP-encoded header. The header '
+        'contains all three trie roots, so changing any single transaction, '
+        'receipt or storage slot changes its leaf, then its trie root, then '
+        'the block hash, then every descendant block hash. This is the same '
+        'tamper-evident property as Bitcoin\'s prev_hash linkage, but built on '
+        'three commitments instead of one.</p>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_litecoin_m5() -> None:
@@ -3577,74 +4724,450 @@ def render_litecoin_m6() -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_ethereum_m7() -> None:
-    module_header("M7 — ETHEREUM GAS UTILIZATION PREDICTOR")
-    try:
-        blocks = load_eth_recent_blocks(60)
-    except Exception as e:
-        render_error(f"Could not fetch Ethereum prediction data: {e}")
-        return
+def _eth_m7_build_dataset(blocks: list[dict]) -> tuple[pd.DataFrame, list[str]]:
+    """Build a supervised dataset to predict next-block base fee.
+
+    Features are lag-1/2/3 base fee, lag-1/2 gas utilization, lag-1 tx count,
+    3-block rolling means of base fee and gas utilization, and hour-of-day.
+    Target is the next block's base fee in gwei. Chronological order is
+    preserved so a temporal split is meaningful.
+    """
     ordered = sorted(blocks, key=lambda b: b["number"])
-    y = np.array([b["gas_utilization"] * 100 for b in ordered], dtype=float)
-    x = np.arange(len(y), dtype=float)
-    slope, intercept = np.polyfit(x, y, 1)
-    fitted = intercept + slope * x
-    pred = float(intercept + slope * len(y))
-    mae = float(np.mean(np.abs(y - fitted)))
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Samples", f"{len(y):,}")
-    c2.metric("Current Gas Util.", f"{y[-1]:.1f}%")
-    c3.metric("Next Forecast", f"{max(0, min(100, pred)):.1f}%")
-    c4.metric("In-sample MAE", f"{mae:.2f} pp")
+    df = pd.DataFrame({
+        "number": [b["number"] for b in ordered],
+        "timestamp": [b["timestamp"] for b in ordered],
+        "datetime": [b["datetime"] for b in ordered],
+        "gas_utilization": [b["gas_utilization"] * 100 for b in ordered],
+        "base_fee_gwei": [b["base_fee_gwei"] for b in ordered],
+        "tx_count": [b["tx_count"] for b in ordered],
+    })
+    df["hour"] = pd.to_datetime(df["timestamp"], unit="s", utc=True).dt.hour
+    df["lag1_fee"] = df["base_fee_gwei"].shift(1)
+    df["lag2_fee"] = df["base_fee_gwei"].shift(2)
+    df["lag3_fee"] = df["base_fee_gwei"].shift(3)
+    df["lag1_gas"] = df["gas_utilization"].shift(1)
+    df["lag2_gas"] = df["gas_utilization"].shift(2)
+    df["lag1_tx"] = df["tx_count"].shift(1)
+    df["roll3_fee"] = df["base_fee_gwei"].shift(1).rolling(3).mean()
+    df["roll3_gas"] = df["gas_utilization"].shift(1).rolling(3).mean()
+    df["target_fee"] = df["base_fee_gwei"]
+
+    feature_cols = [
+        "lag1_fee", "lag2_fee", "lag3_fee",
+        "lag1_gas", "lag2_gas", "lag1_tx",
+        "roll3_fee", "roll3_gas", "hour",
+    ]
+    dataset = df.dropna(subset=feature_cols + ["target_fee"]).copy().reset_index(drop=True)
+    return dataset, feature_cols
+
+
+def render_ethereum_m7() -> None:
+    module_header("M7 — ETHEREUM BASE FEE PREDICTOR")
+
+    col_ctrl1, col_ctrl2, _ = st.columns([2, 2, 3])
+    with col_ctrl1:
+        n_blocks = st.slider(
+            "Recent blocks",
+            min_value=80, max_value=300, value=200, step=20,
+            key="m7_eth_n_blocks",
+        )
+    with col_ctrl2:
+        test_fraction_pct = st.slider(
+            "Holdout test split",
+            min_value=20, max_value=40, value=30, step=5,
+            key="m7_eth_test_fraction",
+        )
+
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
-    st.markdown('<div class="card"><div class="card-title">Gas Utilization Forecast Backtest</div>', unsafe_allow_html=True)
-    fig = go.Figure()
-    times = [b["datetime"] for b in ordered]
-    fig.add_trace(go.Scatter(x=times, y=y, mode="lines+markers", name="Observed gas utilization", line=dict(color=active_crypto.primary_color, width=2.5)))
-    fig.add_trace(go.Scatter(x=times, y=fitted, mode="lines", name="Linear fit", line=dict(color=active_crypto.secondary_color, width=2, dash="dash")))
-    fig.add_trace(go.Scatter(x=[times[-1], times[-1] + pd.Timedelta(seconds=12)], y=[y[-1], max(0, min(100, pred))], mode="lines+markers", name="Next forecast", line=dict(color="#1CE87A", width=3)))
-    fig.add_hline(y=50, line_dash="dot", line_color="#6B7DA0", annotation_text="EIP-1559 target")
-    apply_chart_style(fig)
-    fig.update_layout(height=360, xaxis_title="Recent blocks", yaxis_title="Gas utilization (%)", legend=dict(bgcolor="rgba(15,22,41,0.85)"))
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("This Ethereum-specific second AI variant predicts near-term gas pressure, not PoW difficulty.")
+
+    with st.spinner("Fetching Ethereum blocks via JSON-RPC batch..."):
+        try:
+            blocks = load_eth_blocks_batched(n_blocks)
+        except Exception as e:
+            render_error(f"Could not fetch Ethereum prediction data: {e}")
+            return
+
+    if not blocks or len(blocks) < 30:
+        render_error("Not enough Ethereum blocks for training.")
+        return
+
+    try:
+        from sklearn.ensemble import RandomForestRegressor
+        from sklearn.linear_model import LinearRegression
+        from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+        dataset, feature_cols = _eth_m7_build_dataset(blocks)
+        if len(dataset) < 12:
+            render_error("Need at least 12 usable rows after lag features.")
+            return
+
+        n_test = max(2, int(round(len(dataset) * test_fraction_pct / 100.0)))
+        n_test = min(n_test, max(2, len(dataset) - 4))
+        split_idx = len(dataset) - n_test
+        train_df = dataset.iloc[:split_idx].copy()
+        test_df = dataset.iloc[split_idx:].copy()
+
+        X_train = train_df[feature_cols]
+        y_train = train_df["target_fee"]
+        X_test = test_df[feature_cols]
+        y_test = test_df["target_fee"].values
+
+        models = {
+            "Linear Regression": LinearRegression(),
+            "Random Forest": RandomForestRegressor(
+                n_estimators=200, max_depth=5, min_samples_leaf=2, random_state=42,
+            ),
+        }
+        for m in models.values():
+            m.fit(X_train, y_train)
+
+        evaluations: dict[str, dict] = {}
+        for name, m in models.items():
+            y_pred = m.predict(X_test)
+            evaluations[name] = {
+                "mae": float(mean_absolute_error(y_test, y_pred)),
+                "rmse": float(np.sqrt(mean_squared_error(y_test, y_pred))),
+                "r2": float(r2_score(y_test, y_pred)) if len(y_test) > 1 else float("nan"),
+                "predictions": y_pred,
+            }
+
+        best_name = min(evaluations, key=lambda n: evaluations[n]["mae"])
+        best_eval = evaluations[best_name]
+
+        latest_features = dataset.iloc[[-1]][feature_cols]
+        next_fee_pred = float(models[best_name].predict(latest_features)[0])
+        current_fee = float(dataset["target_fee"].iloc[-1])
+        delta_pct = ((next_fee_pred - current_fee) / current_fee * 100.0) if current_fee else 0.0
+    except Exception as e:
+        render_error(f"Ethereum predictor error: {e}")
+        return
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Usable Samples", f"{len(dataset):,}")
+    c2.metric("Train / Test", f"{len(train_df)} / {len(test_df)}")
+    c3.metric("Best Model", best_name)
+    c4.metric("Holdout MAE", f"{best_eval['mae']:.3f} gwei")
+    forecast_color = "#FF4560" if delta_pct >= 0 else "#1CE87A"
+    with c5:
+        st.markdown(
+            custom_metric(
+                "Next Block Base Fee",
+                f"{next_fee_pred:.2f} gwei",
+                forecast_color, forecast_color,
+            ),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    col_chart, col_metrics = st.columns([3, 2], gap="medium")
+    with col_chart:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Holdout Prediction — Base Fee Backtest</div>',
+            unsafe_allow_html=True,
+        )
+        fig_pred = go.Figure()
+        fig_pred.add_trace(go.Scatter(
+            x=test_df["datetime"],
+            y=y_test,
+            mode="lines+markers",
+            name="Observed base fee",
+            line=dict(color="#1CE87A", width=2.5),
+            marker=dict(size=6),
+            hovertemplate="%{x|%Y-%m-%d %H:%M}<br>Actual: %{y:.2f} gwei<extra></extra>",
+        ))
+        model_colors = {
+            "Linear Regression": active_crypto.secondary_color,
+            "Random Forest": active_crypto.primary_color,
+        }
+        for name, evaluation in evaluations.items():
+            fig_pred.add_trace(go.Scatter(
+                x=test_df["datetime"],
+                y=evaluation["predictions"],
+                mode="lines+markers",
+                name=name,
+                line=dict(color=model_colors.get(name, "#E8EDF5"), width=2, dash="dash"),
+                marker=dict(size=5),
+                hovertemplate=f"{name}<br>%{{x|%Y-%m-%d %H:%M}}<br>Pred: %{{y:.2f}} gwei<extra></extra>",
+            ))
+        last_dt = test_df["datetime"].iloc[-1]
+        fig_pred.add_trace(go.Scatter(
+            x=[last_dt, last_dt + pd.Timedelta(seconds=12)],
+            y=[current_fee, next_fee_pred],
+            mode="lines+markers",
+            name=f"Next-block forecast ({best_name})",
+            line=dict(color=forecast_color, width=3),
+            marker=dict(size=9, symbol="diamond"),
+            hovertemplate="Forecast: %{y:.2f} gwei<extra></extra>",
+        ))
+        apply_chart_style(fig_pred)
+        fig_pred.update_layout(
+            xaxis_title="Time (UTC)",
+            yaxis_title="Base fee (gwei)",
+            height=360,
+            legend=dict(
+                x=0.02, y=0.98, xanchor="left",
+                bgcolor="rgba(15,22,41,0.85)",
+                bordercolor="#1E2D5A", borderwidth=1,
+            ),
+        )
+        st.plotly_chart(fig_pred, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_metrics:
+        st.markdown(
+            '<div class="card"><div class="card-title">Regression Metrics</div>',
+            unsafe_allow_html=True,
+        )
+        rows = []
+        for name, evaluation in evaluations.items():
+            is_best = name == best_name
+            rows.extend([
+                (f"{name} MAE", f"{evaluation['mae']:.3f} gwei",
+                 "#1CE87A" if is_best else "#E8EDF5"),
+                (f"{name} RMSE", f"{evaluation['rmse']:.3f} gwei", "#00C2FF"),
+                (f"{name} R²",
+                 "N/A" if pd.isna(evaluation["r2"]) else f"{evaluation['r2']:.3f}",
+                 "#F7931A"),
+            ])
+        rows.extend([
+            ("Current base fee", f"{current_fee:.3f} gwei", "#E8EDF5"),
+            ("Predicted next block", f"{next_fee_pred:.3f} gwei", forecast_color),
+            ("Predicted Δ", f"{delta_pct:+.2f}%", forecast_color),
+        ])
+        table_rows = "".join(
+            f'<tr onmouseover="this.style.background=\'rgba(0,194,255,0.04)\'"'
+            f' onmouseout="this.style.background=\'transparent\'">'
+            f'<td style="padding:7px 10px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-size:0.82rem;color:#6B7DA0;">{label}</td>'
+            f'<td style="padding:7px 10px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-size:0.9rem;font-weight:700;'
+            f'color:{color};text-align:right;">{value}</td>'
+            f'</tr>'
+            for label, value, color in rows
+        )
+        st.markdown(
+            f'<table style="width:100%;border-collapse:collapse;">'
+            f'<tbody>{table_rows}</tbody></table>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.77rem;color:#6B7DA0;'
+            'line-height:1.6;margin-top:12px;">'
+            'Same training protocol as Bitcoin M7: chronological train/test split, '
+            'two models compared on holdout MAE/RMSE/R². The interesting Ethereum '
+            'analogue of "difficulty retarget" is the EIP-1559 base fee, which '
+            'adjusts every block based on gas utilization.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="card"><div class="card-title">'
+        'Feature Set And Model Rationale</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<p style="font-family:Inter,sans-serif;font-size:0.82rem;color:#6B7DA0;'
+        'line-height:1.65;margin:0;">'
+        'Bitcoin M7 forecasts difficulty retargets every 2016 blocks. Ethereum '
+        'has no equivalent retarget after The Merge — but EIP-1559 introduces a '
+        'per-block fee market with deterministic ±12.5% adjustments based on gas '
+        'utilization. That makes base fee the natural forecasting target.<br><br>'
+        'Features: lag-1/2/3 of base fee, lag-1/2 of gas utilization, lag-1 tx '
+        'count, 3-block rolling means, and hour-of-day (UTC).<br><br>'
+        '<strong style="color:#E8EDF5;">Why two models?</strong> '
+        'Linear Regression encodes the EIP-1559 update rule almost exactly when '
+        'lag-1 base fee dominates. Random Forest can capture the non-linear MEV '
+        'and rebound effects that occur after demand bursts. If RF beats LR on '
+        'holdout, that is evidence that the deterministic part of EIP-1559 is '
+        'not the whole story.</p>',
+        unsafe_allow_html=True,
+    )
     st.markdown("</div>", unsafe_allow_html=True)
 
 
 def render_litecoin_m7() -> None:
-    module_header("M7 — LITECOIN BLOCK TIME PREDICTOR")
-    try:
-        blocks = load_ltc_recent_blocks(20)
-    except Exception as e:
-        render_error(f"Could not fetch Litecoin prediction data: {e}")
-        return
-    df = build_inter_arrival_df(blocks)
-    if len(df) < 3:
-        render_error("Not enough Litecoin intervals for prediction.")
-        return
-    y = df["inter_arrival"].values.astype(float)
-    x = np.arange(len(y), dtype=float)
-    slope, intercept = np.polyfit(x, y, 1)
-    fitted = intercept + slope * x
-    pred = float(intercept + slope * len(y))
-    mae = float(np.mean(np.abs(y - fitted)))
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Samples", f"{len(y):,}")
-    c2.metric("Recent Mean", f"{y.mean():.0f} s")
-    c3.metric("Next Forecast", f"{max(0, pred):.0f} s")
-    c4.metric("In-sample MAE", f"{mae:.0f} s")
+    module_header("M7 — LITECOIN DIFFICULTY PREDICTOR")
+
+    LTC_TARGET = 150  # seconds per block
+
+    col_ctrl1, col_ctrl2, _ = st.columns([2, 2, 3])
+    with col_ctrl1:
+        n_periods = st.slider(
+            "Historical adjustment periods",
+            min_value=12, max_value=40, value=24, step=2,
+            key="m7_ltc_n_periods",
+        )
+    with col_ctrl2:
+        test_fraction_pct = st.slider(
+            "Holdout test split",
+            min_value=20, max_value=40, value=30, step=5,
+            key="m7_ltc_test_fraction",
+        )
+
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
-    st.markdown('<div class="card"><div class="card-title">Litecoin Block-Time Forecast Backtest</div>', unsafe_allow_html=True)
-    fig = go.Figure()
-    heights = df["height"].values
-    fig.add_trace(go.Scatter(x=heights, y=y, mode="lines+markers", name="Observed inter-arrival", line=dict(color=active_crypto.primary_color, width=2.5)))
-    fig.add_trace(go.Scatter(x=heights, y=fitted, mode="lines", name="Linear fit", line=dict(color=active_crypto.secondary_color, width=2, dash="dash")))
-    fig.add_trace(go.Scatter(x=[heights[-1], heights[-1] + 1], y=[y[-1], max(0, pred)], mode="lines+markers", name="Next forecast", line=dict(color="#1CE87A", width=3)))
-    fig.add_hline(y=150, line_dash="dot", line_color="#6B7DA0", annotation_text="150s target")
-    apply_chart_style(fig)
-    fig.update_layout(height=360, xaxis_title="Block height", yaxis_title="Seconds", legend=dict(bgcolor="rgba(15,22,41,0.85)"))
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption("This predictor is about Litecoin block timing. It is not a Bitcoin difficulty-retarget model copied blindly.")
+
+    with st.spinner("Fetching Litecoin difficulty adjustments..."):
+        try:
+            blocks = load_ltc_adjustment_blocks(n_periods)
+            df = build_adjustment_dataframe(blocks, target_block_time=LTC_TARGET)
+            result = train_and_evaluate(df, test_fraction=test_fraction_pct / 100.0)
+        except Exception as e:
+            render_error(f"Litecoin difficulty predictor error: {e}")
+            return
+
+    evaluations = result["evaluations"]
+    best_name = result["best_model_name"]
+    best_eval = evaluations[best_name]
+    dataset = result["dataset"]
+    train_df = result["train_df"]
+    test_df = result["test_df"]
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Usable Samples", f"{len(dataset):,}")
+    c2.metric("Train / Test", f"{len(train_df)} / {len(test_df)}")
+    c3.metric("Best Model", best_name)
+    c4.metric("Holdout MAE", f"{best_eval['mae']:.3f} pp")
+    forecast_color = "#1CE87A" if result["latest_pct_change"] >= 0 else "#FF4560"
+    with c5:
+        st.markdown(
+            custom_metric(
+                "Latest Retarget Pred.",
+                f"{result['latest_pct_change']:+.2f}%",
+                forecast_color,
+                forecast_color,
+            ),
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    col_chart, col_metrics = st.columns([3, 2], gap="medium")
+    with col_chart:
+        st.markdown(
+            '<div class="card"><div class="card-title">'
+            'Holdout Prediction — Litecoin Retarget Backtest</div>',
+            unsafe_allow_html=True,
+        )
+        holdout = result["holdout_predictions"].copy()
+        fig_pred = go.Figure()
+        fig_pred.add_trace(go.Scatter(
+            x=holdout["date"],
+            y=holdout["target_pct_change"],
+            mode="lines+markers",
+            name="Actual retarget change",
+            line=dict(color="#1CE87A", width=2.5),
+            marker=dict(size=8),
+            hovertemplate="%{x|%Y-%m-%d}<br>Actual: %{y:+.3f}%<extra></extra>",
+        ))
+        model_colors = {
+            "Linear Regression": active_crypto.secondary_color,
+            "Random Forest": active_crypto.primary_color,
+        }
+        for model_name in evaluations:
+            col_name = f"{model_name} prediction"
+            fig_pred.add_trace(go.Scatter(
+                x=holdout["date"],
+                y=holdout[col_name],
+                mode="lines+markers",
+                name=model_name,
+                line=dict(
+                    color=model_colors.get(model_name, "#E8EDF5"),
+                    width=2,
+                    dash="dash",
+                ),
+                marker=dict(size=6),
+                hovertemplate=f"{model_name}<br>%{{x|%Y-%m-%d}}<br>Pred: %{{y:+.3f}}%<extra></extra>",
+            ))
+        fig_pred.add_hline(y=0, line_dash="dot", line_color="#6B7DA0")
+        apply_chart_style(fig_pred)
+        fig_pred.update_layout(
+            xaxis_title="Adjustment date",
+            yaxis_title="Difficulty retarget change (%)",
+            height=360,
+            legend=dict(
+                x=0.02, y=0.98, xanchor="left",
+                bgcolor="rgba(15,22,41,0.85)",
+                bordercolor="#1E2D5A", borderwidth=1,
+            ),
+        )
+        st.plotly_chart(fig_pred, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_metrics:
+        st.markdown(
+            '<div class="card"><div class="card-title">Regression Metrics</div>',
+            unsafe_allow_html=True,
+        )
+        rows = []
+        for model_name, evaluation in evaluations.items():
+            is_best = model_name == best_name
+            rows.extend([
+                (f"{model_name} MAE", f"{evaluation['mae']:.3f} pp",
+                 "#1CE87A" if is_best else "#E8EDF5"),
+                (f"{model_name} RMSE", f"{evaluation['rmse']:.3f} pp", "#00C2FF"),
+                (f"{model_name} R²",
+                 "N/A" if pd.isna(evaluation["r2"]) else f"{evaluation['r2']:.3f}", "#F7931A"),
+            ])
+        rows.extend([
+            ("Previous Difficulty", f"{result['previous_difficulty']:.3e}", "#E8EDF5"),
+            ("Actual Difficulty", f"{result['actual_difficulty']:.3e}", "#E8EDF5"),
+            ("Predicted Adjusted Difficulty",
+             f"{result['predicted_adjusted_difficulty']:.3e}", forecast_color),
+        ])
+        table_rows = "".join(
+            f'<tr onmouseover="this.style.background=\'rgba(0,194,255,0.04)\'"'
+            f' onmouseout="this.style.background=\'transparent\'">'
+            f'<td style="padding:7px 10px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-size:0.82rem;color:#6B7DA0;">{label}</td>'
+            f'<td style="padding:7px 10px;border-bottom:1px solid #1E2D5A;'
+            f'font-family:Rajdhani,sans-serif;font-size:0.9rem;font-weight:700;'
+            f'color:{color};text-align:right;">{value}</td>'
+            f'</tr>'
+            for label, value, color in rows
+        )
+        st.markdown(
+            f'<table style="width:100%;border-collapse:collapse;">'
+            f'<tbody>{table_rows}</tbody></table>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<p style="font-family:Inter,sans-serif;font-size:0.77rem;color:#6B7DA0;'
+            'line-height:1.6;margin-top:12px;">'
+            'Identical training protocol to Bitcoin M7: chronological train/test '
+            'split with the latest periods as holdout. The only differences are '
+            'the 150-second target block time and the Litecoin retarget series.</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="card"><div class="card-title">'
+        'Feature Set And Model Rationale</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<p style="font-family:Inter,sans-serif;font-size:0.82rem;color:#6B7DA0;'
+        'line-height:1.65;margin:0;">'
+        'M7 Litecoin replicates the Bitcoin M7 supervised regression on Litecoin '
+        'difficulty adjustments. Litecoin retargets every 2016 blocks just like '
+        'Bitcoin, but at a 150-second target. Features: previous difficulty, '
+        'actual/target period ratio, lag-1 ratio and percentage change, plus '
+        '3-period rolling means. Target: percentage change applied at each '
+        'completed adjustment.<br><br>'
+        '<strong style="color:#E8EDF5;">Why two models?</strong> '
+        'Linear Regression is the interpretable baseline. Random Forest captures '
+        'non-linearity that Litecoin retargets often show after low-volume '
+        'periods. If the linear model wins on holdout MAE, it means the retarget '
+        'rule is dominating the signal and the extra complexity is not paying off.</p>',
+        unsafe_allow_html=True,
+    )
     st.markdown("</div>", unsafe_allow_html=True)
 
 
