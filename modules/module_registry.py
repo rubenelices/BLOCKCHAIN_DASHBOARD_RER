@@ -14,7 +14,7 @@ class ModuleSpec:
 
 MODULE_SPECS: tuple[ModuleSpec, ...] = (
     ModuleSpec("m1", "M1 — PoW Monitor", "M1 — PROOF OF WORK MONITOR", "Network/block activity monitor"),
-    ModuleSpec("m2", "M2 — Block Header Analyzer", "M2 — BLOCK HEADER ANALYZER", "Block structure and consensus verification"),
+    ModuleSpec("m2", "M2 — Block Header", "M2 — BLOCK HEADER ANALYZER", "Block structure and consensus verification"),
     ModuleSpec("m3", "M3 — Difficulty History", "M3 — DIFFICULTY HISTORY", "Consensus adjustment time series"),
     ModuleSpec("m4", "M4 — Anomaly Detector", "M4 — AI COMPONENT: ANOMALY DETECTOR", "AI anomaly analysis on block activity"),
     ModuleSpec("m5", "M5 — Merkle Proof", "M5 — MERKLE PROOF VERIFIER", "Transaction inclusion proof"),

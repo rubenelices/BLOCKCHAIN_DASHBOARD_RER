@@ -1510,15 +1510,16 @@ def render_m2() -> None:
 def render_m3() -> None:
     module_header("M3 — DIFFICULTY HISTORY")
 
-    # Slider — inline in M3 content
+    # Slider — inline in M3 content. ~26 retargets per year (2016 blocks * 10 min).
     col_sl, col_sp = st.columns([2, 5])
     with col_sl:
-        n_periods = st.slider(
-            "Adjustment periods",
-            min_value=5, max_value=20, value=12,
-            key="m3_n_periods",
+        years = st.slider(
+            "Years of history",
+            min_value=1, max_value=10, value=1,
+            key="m3_years",
             on_change=_clear_adj_cache,
         )
+    n_periods = years * 26
 
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
 
@@ -1578,40 +1579,78 @@ def render_m3() -> None:
 
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
 
-    # ── Row 2: Difficulty line chart ──────────────────────────────────────────
+    # ── Row 2: Difficulty chart (toggle absolute / % change) ──────────────────
+    view_mode = st.radio(
+        "View",
+        ["Absolute difficulty", "% change per retarget"],
+        horizontal=True,
+        key="m3_view_mode",
+    )
+
+    title = (
+        "Bitcoin Mining Difficulty — Adjustment History"
+        if view_mode == "Absolute difficulty"
+        else "Bitcoin Difficulty — % Change per Retarget"
+    )
     st.markdown(
-        '<div class="card"><div class="card-title">'
-        'Bitcoin Mining Difficulty — Adjustment History</div>',
+        f'<div class="card"><div class="card-title">{title}</div>',
         unsafe_allow_html=True,
     )
-    df_plot = df.dropna(subset=["date", "difficulty"])
-    if not df_plot.empty:
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df_plot["date"],
-            y=df_plot["difficulty"],
-            mode="lines+markers",
-            name="Difficulty",
-            line=dict(color="#00C2FF", width=2),
-            fill="tozeroy",
-            fillcolor="rgba(0,194,255,0.05)",
-            marker=dict(symbol="diamond", color="#F7931A", size=10),
-            customdata=df_plot["pct_change"].fillna(0).values,
-            hovertemplate=(
-                "<b>%{x|%Y-%m-%d}</b><br>"
-                "Difficulty: %{y:.3e}<br>"
-                "Change: %{customdata:+.2f}%"
-                "<extra></extra>"
-            ),
-        ))
-        apply_chart_style(fig)
-        fig.update_layout(
-            xaxis_title="Date",
-            yaxis_title="Difficulty",
-            showlegend=False,
-            height=360,
-        )
-        st.plotly_chart(fig, use_container_width=True)
+
+    if view_mode == "Absolute difficulty":
+        df_plot = df.dropna(subset=["date", "difficulty"])
+        if not df_plot.empty:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=df_plot["date"],
+                y=df_plot["difficulty"],
+                mode="lines+markers",
+                name="Difficulty",
+                line=dict(color="#00C2FF", width=2),
+                fill="tozeroy",
+                fillcolor="rgba(0,194,255,0.05)",
+                marker=dict(symbol="diamond", color="#F7931A", size=10),
+                customdata=df_plot["pct_change"].fillna(0).values,
+                hovertemplate=(
+                    "<b>%{x|%Y-%m-%d}</b><br>"
+                    "Difficulty: %{y:.3e}<br>"
+                    "Change: %{customdata:+.2f}%"
+                    "<extra></extra>"
+                ),
+            ))
+            apply_chart_style(fig)
+            fig.update_layout(
+                xaxis_title="Date",
+                yaxis_title="Difficulty",
+                showlegend=False,
+                height=360,
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        df_plot = df.dropna(subset=["date", "pct_change"])
+        if not df_plot.empty:
+            colors = ["#1CE87A" if v >= 0 else "#FF4560" for v in df_plot["pct_change"]]
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=df_plot["date"],
+                y=df_plot["pct_change"],
+                marker_color=colors,
+                name="% change",
+                hovertemplate=(
+                    "<b>%{x|%Y-%m-%d}</b><br>"
+                    "Change: %{y:+.2f}%"
+                    "<extra></extra>"
+                ),
+            ))
+            fig.add_hline(y=0, line_color="#6B7DA0", line_width=1)
+            apply_chart_style(fig)
+            fig.update_layout(
+                xaxis_title="Date",
+                yaxis_title="% change",
+                showlegend=False,
+                height=360,
+            )
+            st.plotly_chart(fig, use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<hr class="glow-sep">', unsafe_allow_html=True)
