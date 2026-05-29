@@ -1,3 +1,75 @@
+<div align="center">
+  <img src="Header.png" alt="CryptoChain Analyzer Dashboard" width="100%"/>
+</div>
+
+---
+
+# CryptoChain Analyzer Dashboard
+
+A full-stack Bitcoin blockchain analytics dashboard built with Python and Streamlit, developed as a university project for the Cryptography course at UAX (2025–26). It connects to public blockchain APIs — no API key required — and presents live on-chain data through seven analytical modules covering Proof of Work, difficulty analysis, AI anomaly detection, Merkle proofs, and security modeling.
+
+## What Was Built
+
+| Module | Description |
+|---|---|
+| **M1 — PoW Monitor** | Visualizes mining difficulty, estimated hash rate, and inter-block time distribution using live Bitcoin data from the Blockstream API. |
+| **M2 — Block Header Analyzer** | Parses raw 80-byte block headers, manually verifies Proof of Work with `hashlib`, and counts leading zero bits to explain the target relationship. |
+| **M3 — Difficulty History** | Charts the full difficulty adjustment history across 2016-block epochs, showing period ratios and adjustment statistics. |
+| **M4 — Anomaly Detector (AI)** | Unsupervised anomaly detection on block inter-arrival times using an exponential baseline model and `IsolationForest`. Evaluated with KS goodness-of-fit and synthetic precision / recall / F1. |
+| **M5 — Merkle Proof Verifier** | Rebuilds a transaction's Merkle path from raw block data and verifies it against the block header Merkle root. |
+| **M6 — Security Score** | Estimates 51% attack cost (energy-only) and plots Nakamoto double-spend probability curves for configurable confirmation depths. |
+| **M7 — Difficulty Predictor (AI)** | Supervised `RandomForestRegressor` that predicts the next difficulty adjustment using chronological holdout evaluation — contrasts supervised vs. unsupervised AI approaches. |
+
+## Tech Stack
+
+- **Python 3.11+** · **Streamlit** · **Plotly** · **Pandas** · **scikit-learn**
+- **Blockstream API** (primary) · **Blockchain.info** (fallback for aggregated difficulty history)
+- Dark theme · Share Tech Mono / Rajdhani fonts · Crypto color palette · 60 s auto-refresh
+
+## How to Run
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/rubenelices/BLOCKCHAIN_DASHBOARD_RER.git
+cd BLOCKCHAIN_DASHBOARD_RER
+
+# 2. (Recommended) Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Launch the dashboard
+streamlit run app.py
+```
+
+The app will open automatically at `http://localhost:8501`. No API keys or `.env` file needed — all data is fetched from public endpoints.
+
+## Project Structure
+
+```text
+template-blockchain-dashboard/
+|-- app.py                        # Streamlit entry point & sidebar navigation
+|-- requirements.txt
+|-- api/
+|   `-- blockchain_client.py      # All API calls (Blockstream + Blockchain.info)
+|-- modules/
+|   |-- m1_pow_monitor.py
+|   |-- m2_block_header.py
+|   |-- m3_difficulty_history.py
+|   |-- m4_ai_component.py        # IsolationForest anomaly detector
+|   |-- m5_merkle_proof.py
+|   |-- m6_security_score.py
+|   `-- m7_difficulty_predictor.py
+|-- config/
+|-- prompts/
+`-- report/
+    `-- report.pdf
+```
+
+---
+
 # Blockchain Dashboard Project
 
 Use this repository to build your blockchain dashboard project.
